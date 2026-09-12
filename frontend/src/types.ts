@@ -13,6 +13,8 @@ export interface Course {
   grading_notes: string;
   team_size_min: number;
   team_size_max: number;
+  access?: "student" | "teacher" | "ta";
+  enrolled?: boolean;
 }
 
 export function toCourseContext(course: Course): CourseContext {
@@ -97,16 +99,47 @@ export interface TeamResult {
   thin: string[];
 }
 
+export interface PrefImpact {
+  before: number;
+  after: number;
+  delta_pct: number;
+  hurts_team: boolean;
+  message: string;
+  teammates: string[];
+}
+
+export interface SubmitResponse {
+  profile: StructuredProfile;
+  impact?: PrefImpact | null;
+}
+
+export interface NotificationRecord {
+  id: string;
+  course_id: string;
+  to_name: string;
+  to_role: "student" | "teacher";
+  kind: "concern" | "pref_update" | "score_drop" | "rematch" | "team" | "staff";
+  title: string;
+  body: string;
+  read: boolean;
+  created_at: string;
+  student?: string | null;
+  reason?: string | null;
+}
+
 export interface ConcernRecord {
   name: string;
   course_id: string;
   reason: FlagReason;
   note: string;
+  status?: "open" | "approved" | "denied";
+  allow_rematch?: boolean;
 }
 
 export interface RosterResponse {
   profiles: StructuredProfile[];
   concerns: Record<string, ConcernRecord>;
+  rematch_allowed?: Record<string, boolean>;
   course: Course;
   assignment?: OptimizeResponse | null;
 }
@@ -118,6 +151,15 @@ export interface OptimizeResponse {
   flag_note?: string | null;
 }
 
+export interface LoginResponse {
+  name: string;
+  role: "student" | "teacher";
+  staff_kind: "teacher" | "ta" | "none";
+  can_create_course: boolean;
+  hint?: string | null;
+  courses: Course[];
+}
+
 export type FlagReason = "schedule" | "goal" | "workload" | "other";
 
 export const FLAG_REASONS: { value: FlagReason; label: string }[] = [
@@ -126,6 +168,13 @@ export const FLAG_REASONS: { value: FlagReason; label: string }[] = [
   { value: "workload", label: "Workload" },
   { value: "other", label: "Other" },
 ];
+
+export const FLAG_REASON_LABELS: Record<FlagReason, string> = {
+  schedule: "Schedule",
+  goal: "Goal mismatch",
+  workload: "Workload",
+  other: "Other",
+};
 
 export const GOAL_LABELS: Record<GoalType, string> = {
   pass: "Pass",

@@ -1,14 +1,13 @@
-import { useEffect, useMemo, useState } from "react";
-import { flagStudent, loadRoster, optimizeTeams } from "../api";
+import { useEffect, useState } from "react";
+import { addCourseStaff, flagStudent, loadRoster, optimizeTeams, resolveConcern, setRematchPermission } from "../api";
 import {
   BREAKDOWN_LABELS,
   CONFLICT_LABELS,
   FLAG_REASONS,
   GOAL_LABELS,
   ROLE_LABELS,
+  FLAG_REASON_LABELS,
   SKILL_FIELDS,
-  formatSlot,
-  isLiveStudent,
   skillList,
   toCourseContext,
   type Course,
@@ -17,33 +16,38 @@ import {
   type RosterResponse,
   type StructuredProfile,
 } from "../types";
+import AvailCalendar from "./AvailCalendar";
 
 interface Props {
   course: Course;
+  actor: string;
+  canManageStaff?: boolean;
+  focusName?: string | null;
+  reloadToken?: number;
 }
 
-export default function AdminDashboard({ course }: Props) {
+export default function AdminDashboard({ course, actor, canManageStaff, focusName, reloadToken = 0 }: Props) {
   const [roster, setRoster] = useState<RosterResponse | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [result, setResult] = useState<OptimizeResponse | null>(null);
-  const [busy, setBusy] = useState<"load" | "opt" | "flag" | null>(null);
+  const [busy, setBusy] = useState<"load" | "opt" | "flag" | "staff" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<"students" | "teams">("students");
+  const [taName, setTaName] = useState("");
 
   const profiles = roster?.profiles ?? [];
   const selected = profiles.find((p) => p.id === selectedId) ?? null;
-  const liveCount = useMemo(() => profiles.filter((p) => isLiveStudent(p.id)).length, [profiles]);
   const ctx = toCourseContext(course);
 
-  async function refreshRoster() {
+  async function refreshRoster(opts?: { jumpTeams?: boolean }) {
     setBusy("load");
     setError(null);
     try {
-      const res = await loadRoster(course.id, 16);
+      const res = await loadRoster(course.id, 16, actor);
       setRoster(res);
       setSelectedId((cur) => (cur && res.profiles.some((p) => p.id === cur) ? cur : res.profiles[0]?.id ?? null));
       setResult(res.assignment ?? null);
-      if (res.assignment) setTab("teams");
+      if (opts?.jumpTeams && res.assignment) setTab("teams");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Couldn't load the roster.");
     } finally {
@@ -54,9 +58,24 @@ export default function AdminDashboard({ course }: Props) {
   useEffect(() => {
     setResult(null);
     setTab("students");
-    void refreshRoster();
+    void refreshRoster({ jumpTeams: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [course.id]);
+
+  useEffect(() => {
+    if (!reloadToken) return;
+    void refreshRoster();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reloadToken]);
+
+  useEffect(() => {
+    if (!focusName || !roster) return;
+    const hit = roster.profiles.find((p) => p.name.toLowerCase() === focusName.toLowerCase());
+    if (hit) {
+      setSelectedId(hit.id);
+      setTab("students");
+    }
+  }, [focusName, roster]);
 
   async function formTeams() {
     if (profiles.length < 4 && !(course.team_size_min <= profiles.length)) return;
@@ -91,18 +110,68 @@ export default function AdminDashboard({ course }: Props) {
     return roster?.concerns[p.name] ?? null;
   }
 
+  function rematchOn(p: StructuredProfile) {
+    const map = roster?.rematch_allowed ?? {};
+    return Boolean(map[p.name] || map[p.name.trim().toLowerCase()]);
+  }
+
+  async function decideConcern(p: StructuredProfile, status: "approved" | "denied") {
+    setBusy("flag");
+    setError(null);
+    try {
+      await resolveConcern(p.name, course.id, status);
+      await refreshRoster();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Couldn't update that concern.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function toggleRematch(p: StructuredProfile, allowed: boolean) {
+    setBusy("flag");
+    setError(null);
+    try {
+      await setRematchPermission(p.name, course.id, allowed);
+      await refreshRoster();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Couldn't update rematch permission.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function addTa() {
+    const who = taName.trim();
+    if (!who || busy) return;
+    setBusy("staff");
+    setError(null);
+    try {
+      await addCourseStaff(course.id, actor, who);
+      setTaName("");
+      await refreshRoster();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Couldn't add that TA.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
   return (
     <div className="admin">
+      <div className="page-head">
+        <p className="kicker">{course.access === "ta" ? "TA desk" : "Instructor desk"}</p>
+        <h1>{course.name}</h1>
+        <p className="page-dek">
+          Flags, preference changes, and new teams land in the bell. Students never see each other’s private prefs.
+        </p>
+      </div>
       <div className="admin-toolbar">
         <div>
           <p className="admin-meta">
             {busy === "load" && profiles.length === 0
-              ? "Loading class…"
-              : `${profiles.length} students${liveCount > 0 ? ` · ${liveCount} enrolled` : " · sample fill"}`}
-          </p>
-          <p className="field-help">
-            Enrolled students keep one working-style profile across courses. Sample classmates fill
-            the rest of this section. Teams here are the same assignment each student sees.
+              ? "Loading…"
+              : `${profiles.length} students`}
           </p>
         </div>
         <div className="admin-actions">
@@ -119,6 +188,27 @@ export default function AdminDashboard({ course }: Props) {
           </button>
         </div>
       </div>
+
+      {canManageStaff && (
+        <form
+          className="staff-row"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void addTa();
+          }}
+        >
+          <label htmlFor="ta-name">Add a TA</label>
+          <input
+            id="ta-name"
+            value={taName}
+            onChange={(e) => setTaName(e.target.value)}
+            placeholder="Student name"
+          />
+          <button className="btn ghost" type="submit" disabled={!taName.trim() || busy !== null}>
+            {busy === "staff" ? "Adding…" : "Add TA"}
+          </button>
+        </form>
+      )}
 
       {error && <div className="error-banner">{error}</div>}
 
@@ -149,8 +239,10 @@ export default function AdminDashboard({ course }: Props) {
                   <tr key={p.id} className={p.id === selectedId ? "on" : ""} onClick={() => setSelectedId(p.id)}>
                     <td>
                       <strong>{p.name}</strong>
-                      {isLiveStudent(p.id) && <span className="live-tag">Enrolled</span>}
-                      {concernFor(p) && <span className="live-tag warn">Flagged</span>}
+                      {concernFor(p) && (concernFor(p)?.status ?? "open") === "open" && (
+                        <span className="live-tag warn">Flagged</span>
+                      )}
+                      {rematchOn(p) && <span className="live-tag">Rematch</span>}
                     </td>
                     <td>{GOAL_LABELS[p.goal]}</td>
                     <td>{p.hours}</td>
@@ -165,17 +257,46 @@ export default function AdminDashboard({ course }: Props) {
           {selected && (
             <aside className="student-detail" aria-label={`${selected.name} profile`}>
               <h2>{selected.name}</h2>
-              <p className="teammate-sub">
-                {isLiveStudent(selected.id) ? "Enrolled — same profile across courses" : "Sample classmate"} ·
-                confidence {Math.round(selected.confidence * 100)}%
-              </p>
-
               {concernFor(selected) && (
                 <p className="violations">
-                  Flagged: {concernFor(selected)?.reason}
+                  {FLAG_REASON_LABELS[concernFor(selected)!.reason]}
                   {concernFor(selected)?.note ? ` — ${concernFor(selected)?.note}` : ""}
+                  {concernFor(selected)?.status && concernFor(selected)?.status !== "open"
+                    ? ` · ${concernFor(selected)?.status}`
+                    : ""}
                 </p>
               )}
+
+              <div className="form-actions">
+                {concernFor(selected) && concernFor(selected)?.status !== "approved" && (
+                  <button
+                    className="btn primary"
+                    type="button"
+                    disabled={busy !== null}
+                    onClick={() => void decideConcern(selected, "approved")}
+                  >
+                    Approve rematch
+                  </button>
+                )}
+                {concernFor(selected) && (
+                  <button
+                    className="btn ghost"
+                    type="button"
+                    disabled={busy !== null}
+                    onClick={() => void decideConcern(selected, "denied")}
+                  >
+                    Dismiss concern
+                  </button>
+                )}
+                <button
+                  className="btn ghost"
+                  type="button"
+                  disabled={busy !== null}
+                  onClick={() => void toggleRematch(selected, !rematchOn(selected))}
+                >
+                  {rematchOn(selected) ? "Lock their team" : "Allow rematch"}
+                </button>
+              </div>
 
               <dl className="mini-facts">
                 <div>
@@ -197,11 +318,7 @@ export default function AdminDashboard({ course }: Props) {
               </dl>
 
               <h3>Availability</h3>
-              <div className="slot-chips">
-                {selected.availability.map((s) => (
-                  <span key={s}>{formatSlot(s)}</span>
-                ))}
-              </div>
+              <AvailCalendar slots={selected.availability} compact />
 
               <h3>Skills</h3>
               <div className="skill-list compact">
@@ -230,23 +347,17 @@ export default function AdminDashboard({ course }: Props) {
       )}
 
       {tab === "teams" && !result && (
-        <p className="page-dek">
-          No official teams yet. Form teams here, or have a student find a team — both write the same
-          assignment.
-        </p>
+        <p className="page-dek">No teams yet. Form teams, or wait for a student to match.</p>
       )}
 
       {tab === "teams" && result && (
         <div className="teams-view">
           <div className="baseline-banner">
-            <strong>CrewFit vs random</strong>
             <p>
-              Optimized{" "}
-              {(result.teams.reduce((s, t) => s + t.score, 0) / result.teams.length).toFixed(2)} ·
-              random {result.baseline_score.toFixed(2)} ·{" "}
+              Average fit {(result.teams.reduce((s, t) => s + t.score, 0) / result.teams.length).toFixed(2)}
               <em>
-                {result.improvement_pct >= 0 ? "+" : ""}
-                {result.improvement_pct.toFixed(1)}%
+                {result.improvement_pct >= 0 ? " +" : " "}
+                {result.improvement_pct.toFixed(0)}% vs random
               </em>
             </p>
           </div>
@@ -267,11 +378,9 @@ export default function AdminDashboard({ course }: Props) {
                 )}
                 <p className="teammate-sub">
                   {team.team_goal}
-                  {team.shared_windows.length > 0
-                    ? ` · ${team.shared_windows.map(formatSlot).join(", ")}`
-                    : " · no shared window"}
                   {team.coverage.length > 0 ? ` · covers ${skillList(team.coverage)}` : ""}
                 </p>
+                <AvailCalendar slots={team.shared_windows} compact />
                 <ul>
                   {team.members.map((m) => {
                     const full = profiles.find((p) => p.id === m.id);
@@ -279,7 +388,6 @@ export default function AdminDashboard({ course }: Props) {
                       <li key={m.id}>
                         <div>
                           <strong>{m.name}</strong>
-                          {full && isLiveStudent(full.id) && <span className="live-tag">Enrolled</span>}
                           <span className="teammate-sub">
                             {GOAL_LABELS[m.goal]} · {m.hours}h
                             {full ? ` · ${ROLE_LABELS[full.role]}` : ""}
@@ -296,7 +404,7 @@ export default function AdminDashboard({ course }: Props) {
                               e.target.value = "";
                             }}
                           >
-                            <option value="">Flag…</option>
+                            <option value="">Move…</option>
                             {FLAG_REASONS.map((r) => (
                               <option key={r.value} value={r.value}>
                                 {r.label}

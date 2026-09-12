@@ -5,10 +5,13 @@ import type {
   Course,
   CourseContext,
   FlagReason,
+  LoginResponse,
   MatchResponse,
+  NotificationRecord,
   OptimizeResponse,
   RosterResponse,
   StructuredProfile,
+  SubmitResponse,
   TeamResult,
 } from "./types";
 
@@ -30,8 +33,28 @@ function post<T>(path: string, body: unknown): Promise<T> {
   return request<T>(path, { method: "POST", body: JSON.stringify(body) });
 }
 
-export function listCourses() {
-  return request<{ courses: Course[] }>("/courses");
+export function listCourses(name?: string, role?: "student" | "teacher") {
+  const q = new URLSearchParams();
+  if (name) q.set("name", name);
+  if (role) q.set("role", role);
+  const suffix = q.toString() ? `?${q}` : "";
+  return request<{ courses: Course[] }>(`/courses${suffix}`);
+}
+
+export function loginAccount(name: string, role: "student" | "teacher") {
+  return post<LoginResponse>("/auth/login", { name, requested_role: role });
+}
+
+export function enrollInCourse(courseId: string, name: string) {
+  return post<{ ok: boolean }>(`/courses/${encodeURIComponent(courseId)}/enroll`, { name });
+}
+
+export function addCourseStaff(courseId: string, actor: string, name: string) {
+  return post<{ ok: boolean; name: string; kind: string }>(`/courses/${encodeURIComponent(courseId)}/staff`, {
+    actor,
+    name,
+    kind: "ta",
+  });
 }
 
 export function createCourse(body: {
@@ -39,6 +62,7 @@ export function createCourse(body: {
   grading_notes?: string;
   team_size_min?: number;
   team_size_max?: number;
+  actor: string;
 }) {
   return post<Course>("/courses", body);
 }
@@ -46,11 +70,34 @@ export function createCourse(body: {
 export function lookupProfile(name: string, courseId?: string) {
   const q = new URLSearchParams({ name });
   if (courseId) q.set("course_id", courseId);
-  return request<{ profile: StructuredProfile | null; match: MatchResponse | null }>(`/profile?${q}`);
+  return request<{
+    profile: StructuredProfile | null;
+    match: MatchResponse | null;
+    rematch_allowed?: boolean;
+    concern?: ConcernRecord | null;
+  }>(`/profile?${q}`);
 }
 
-export function sendChat(name: string, messages: ChatMessage[], course: CourseContext) {
-  return post<ChatResponse>("/chat", { name, messages, course });
+export interface ChatRequestOpts {
+  mode?: "intake" | "update";
+  profile?: StructuredProfile;
+  focus?: "goal" | "hours" | "availability" | "skills" | "role" | "any";
+}
+
+export function sendChat(
+  name: string,
+  messages: ChatMessage[],
+  course: CourseContext,
+  opts?: ChatRequestOpts,
+) {
+  return post<ChatResponse>("/chat", {
+    name,
+    messages,
+    course,
+    mode: opts?.mode ?? "intake",
+    profile: opts?.profile,
+    focus: opts?.focus,
+  });
 }
 
 export function findMatch(
@@ -64,11 +111,13 @@ export function findMatch(
 
 export function submitProfile(profile: StructuredProfile, courseId?: string) {
   const q = courseId ? `?course_id=${encodeURIComponent(courseId)}` : "";
-  return post<StructuredProfile>(`/submit${q}`, profile);
+  return post<SubmitResponse>(`/submit${q}`, profile);
 }
 
-export function loadRoster(courseId: string, fill = 16) {
-  return request<RosterResponse>(`/roster?course_id=${encodeURIComponent(courseId)}&fill=${fill}`);
+export function loadRoster(courseId: string, fill = 16, actor?: string) {
+  const q = new URLSearchParams({ course_id: courseId, fill: String(fill) });
+  if (actor) q.set("actor", actor);
+  return request<RosterResponse>(`/roster?${q}`);
 }
 
 export function optimizeTeams(profiles: StructuredProfile[], course: CourseContext, courseId?: string) {
@@ -94,6 +143,27 @@ export function flagStudent(
   });
 }
 
+export function markNotificationsRead(ids: string[]) {
+  return post<{ ok: boolean }>("/notifications/read", { ids });
+}
+
+export function listNotifications(courseId: string, name: string, role: "student" | "teacher") {
+  const q = new URLSearchParams({ course_id: courseId, name, role });
+  return request<{ notifications: NotificationRecord[] }>(`/notifications?${q}`);
+}
+
 export function raiseConcern(name: string, courseId: string, reason: FlagReason, note = "") {
   return post<ConcernRecord>("/concern", { name, course_id: courseId, reason, note });
+}
+
+export function resolveConcern(name: string, courseId: string, status: "approved" | "denied") {
+  return post<ConcernRecord>("/concern/resolve", { name, course_id: courseId, status });
+}
+
+export function setRematchPermission(name: string, courseId: string, allowed: boolean) {
+  return post<{ name: string; course_id: string; allowed: boolean }>("/rematch", {
+    name,
+    course_id: courseId,
+    allowed,
+  });
 }

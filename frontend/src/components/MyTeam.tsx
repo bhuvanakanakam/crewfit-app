@@ -2,24 +2,39 @@ import { useState } from "react";
 import { raiseConcern, submitProfile } from "../api";
 import {
   FLAG_REASONS,
-  formatSlot,
   skillList,
   type Course,
   type FlagReason,
   type MatchResponse,
   type StructuredProfile,
 } from "../types";
+import AvailCalendar from "./AvailCalendar";
 
 interface Props {
   result: MatchResponse;
   yourName: string;
   course: Course;
   profile?: StructuredProfile | null;
+  rematchAllowed?: boolean;
+  impactNote?: string | null;
+  impactHurt?: boolean;
   onChangeCourse: () => void;
-  onOpenChat: () => void;
+  onUpdatePrefs: () => void;
+  onRematch?: () => void;
 }
 
-export default function MyTeam({ result, yourName, course, profile, onChangeCourse, onOpenChat }: Props) {
+export default function MyTeam({
+  result,
+  yourName,
+  course,
+  profile,
+  rematchAllowed,
+  impactNote,
+  impactHurt,
+  onChangeCourse,
+  onUpdatePrefs,
+  onRematch,
+}: Props) {
   const [copied, setCopied] = useState(false);
   const [flagOpen, setFlagOpen] = useState(false);
   const [reason, setReason] = useState<FlagReason>("schedule");
@@ -55,15 +70,17 @@ export default function MyTeam({ result, yourName, course, profile, onChangeCour
 
   return (
     <div className="match-panel">
-      <p className="kicker">{course.name}</p>
-      <h1>Your team</h1>
-      <p className="page-dek">
-        {course.team_size_min === course.team_size_max
-          ? `Teams in this course are ${course.team_size_min}. `
-          : `Teams in this course are ${course.team_size_min}–${course.team_size_max} people. `}
-        Same assignment the teacher sees. Names plus group-level facts — not anyone else’s private
-        answers.
-      </p>
+      <div className="page-head">
+        <p className="kicker">{course.name}</p>
+        <h1>Your team</h1>
+        <p className="page-dek">Names and shared facts only — preferences stay private.</p>
+      </div>
+
+      {impactNote && (
+        <div className={impactHurt ? "need-box warn-box" : "need-box"}>
+          {impactNote}
+        </div>
+      )}
 
       <ul className="teammate-list">
         {result.team.map((m) => (
@@ -73,21 +90,21 @@ export default function MyTeam({ result, yourName, course, profile, onChangeCour
             </span>
             <div>
               <strong>{m.is_you ? `${yourName} (you)` : m.name}</strong>
-              <span className="teammate-sub">{m.is_you ? "That’s you" : "Teammate"}</span>
             </div>
           </li>
         ))}
       </ul>
 
+      <div className="avail-block">
+        <h3>Shared windows</h3>
+        {(result.shared_windows ?? []).length > 0 ? (
+          <AvailCalendar slots={result.shared_windows} />
+        ) : (
+          <p className="pref-empty">None fully overlap — plan to work asynchronously.</p>
+        )}
+      </div>
+
       <div className="fact-grid">
-        <article>
-          <h3>Shared windows</h3>
-          {(result.shared_windows ?? []).length > 0 ? (
-            <p>{result.shared_windows.map(formatSlot).join(" · ")}</p>
-          ) : (
-            <p>None fully overlap — plan to work async.</p>
-          )}
-        </article>
         <article>
           <h3>Team goal</h3>
           <p>{result.team_goal || "Shared project aim"}</p>
@@ -112,13 +129,18 @@ export default function MyTeam({ result, yourName, course, profile, onChangeCour
           <button className="btn primary" type="button" onClick={() => void copyNames()}>
             {copied ? "Copied names" : "Copy names"}
           </button>
+          <button className="btn ghost" type="button" onClick={onUpdatePrefs}>
+            Update preferences
+          </button>
           <button className="btn ghost" type="button" onClick={() => setFlagOpen((v) => !v)}>
             Flag a concern
           </button>
         </div>
 
         {flagState === "sent" && (
-          <p className="need-note">Concern sent to the teacher for {course.name}.</p>
+          <p className="need-note">
+            Concern sent to the teacher. Your team stays as-is until they approve a rematch.
+          </p>
         )}
         {flagError && <div className="error-banner">{flagError}</div>}
 
@@ -158,9 +180,11 @@ export default function MyTeam({ result, yourName, course, profile, onChangeCour
       </div>
 
       <div className="form-actions">
-        <button className="btn ghost" type="button" onClick={onOpenChat}>
-          Update profile in chat
-        </button>
+        {rematchAllowed && onRematch && (
+          <button className="btn ghost" type="button" onClick={onRematch}>
+            Redo team matching
+          </button>
+        )}
         <button className="text-link" type="button" onClick={onChangeCourse}>
           Use this profile in another course
         </button>

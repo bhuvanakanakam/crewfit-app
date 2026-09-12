@@ -1,11 +1,15 @@
 import type { MatchResponse, StructuredProfile } from "./types";
 
 export type Role = "student" | "teacher";
+export type StaffKind = "teacher" | "ta" | "none";
 
 export interface Session {
   name: string;
   role: Role;
   courseId: string | null;
+  staffKind?: StaffKind;
+  canCreateCourse?: boolean;
+  local?: boolean;
 }
 
 const SESSION_KEY = "crewfit.session.v1";

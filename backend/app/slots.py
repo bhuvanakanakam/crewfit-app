@@ -36,7 +36,7 @@ _LEGACY = {
 }
 
 
-def normalize_availability(slots: list[str]) -> list[str]:
+def normalize_availability(slots: list[str], *, fill_default: bool = True) -> list[str]:
     out: list[str] = []
     for s in slots:
         key = s.strip().lower().replace(" ", "_")
@@ -51,4 +51,6 @@ def normalize_availability(slots: list[str]) -> list[str]:
         if s not in seen:
             seen.add(s)
             ordered.append(s)
-    return ordered or ["wed_evening"]
+    if ordered:
+        return ordered
+    return ["wed_evening"] if fill_default else []

@@ -31,6 +31,17 @@ class Course(BaseModel):
         )
 
 
+class CourseView(Course):
+    access: Literal["student", "teacher", "ta"] = "student"
+    enrolled: bool = False
+
+
+class Account(BaseModel):
+    name: str
+    home_role: Literal["student", "teacher"]
+    created_at: str = ""
+
+
 class PersonInput(BaseModel):
     name: str
     bio: str
@@ -146,6 +157,9 @@ class ChatRequest(BaseModel):
             team_size_max=4,
         )
     )
+    mode: Literal["intake", "update"] = "intake"
+    profile: Optional[StructuredProfile] = None
+    focus: Optional[Literal["goal", "hours", "availability", "skills", "role", "any"]] = None
 
 
 class ChatResponse(BaseModel):
@@ -191,15 +205,42 @@ class CreateCourseRequest(BaseModel):
     grading_notes: Optional[str] = ""
     team_size_min: int = 3
     team_size_max: int = 4
+    actor: str = ""
 
 
 class CourseListResponse(BaseModel):
-    courses: list[Course]
+    courses: list[CourseView]
+
+
+class LoginRequest(BaseModel):
+    name: str
+    requested_role: Literal["student", "teacher"]
+
+
+class LoginResponse(BaseModel):
+    name: str
+    role: Literal["student", "teacher"]
+    staff_kind: Literal["teacher", "ta", "none"]
+    can_create_course: bool
+    hint: Optional[str] = None
+    courses: list[CourseView]
+
+
+class EnrollRequest(BaseModel):
+    name: str
+
+
+class StaffRequest(BaseModel):
+    actor: str
+    name: str
+    kind: Literal["ta"] = "ta"
 
 
 class ProfileLookupResponse(BaseModel):
     profile: Optional[StructuredProfile] = None
     match: Optional[MatchResponse] = None
+    rematch_allowed: bool = False
+    concern: Optional["ConcernRecord"] = None
 
 
 class ConcernRequest(BaseModel):
@@ -214,10 +255,64 @@ class ConcernRecord(BaseModel):
     course_id: str
     reason: Literal["schedule", "goal", "workload", "other"]
     note: str = ""
+    status: Literal["open", "approved", "denied"] = "open"
+    allow_rematch: bool = False
+
+
+class ResolveConcernRequest(BaseModel):
+    name: str
+    course_id: str
+    status: Literal["approved", "denied"]
+
+
+class RematchPermissionRequest(BaseModel):
+    name: str
+    course_id: str
+    allowed: bool = True
+
+
+class PrefImpact(BaseModel):
+    before: float
+    after: float
+    delta_pct: float
+    hurts_team: bool
+    message: str
+    teammates: list[str] = []
+
+
+class SubmitResponse(BaseModel):
+    profile: StructuredProfile
+    impact: Optional[PrefImpact] = None
+
+
+class NotificationRecord(BaseModel):
+    id: str
+    course_id: str
+    to_name: str
+    to_role: Literal["student", "teacher"]
+    kind: Literal["concern", "pref_update", "score_drop", "rematch", "team", "staff"]
+    title: str
+    body: str
+    read: bool = False
+    created_at: str = ""
+    student: Optional[str] = None
+    reason: Optional[str] = None
+
+
+class NotificationListResponse(BaseModel):
+    notifications: list[NotificationRecord]
+
+
+class MarkReadRequest(BaseModel):
+    ids: list[str]
 
 
 class RosterResponse(BaseModel):
     profiles: list[StructuredProfile]
     concerns: dict[str, ConcernRecord] = {}
+    rematch_allowed: dict[str, bool] = {}
     course: Course
     assignment: Optional[OptimizeResponse] = None
+
+
+ProfileLookupResponse.model_rebuild()

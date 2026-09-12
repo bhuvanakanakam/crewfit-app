@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 backend/venv/
 backend/.env
+backend/crewfit.db
 
 # Node
 frontend/node_modules/

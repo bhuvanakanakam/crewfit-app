@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { sendChat } from "../api";
+import ProfileCard from "./ProfileCard";
+import AvailCalendar from "./AvailCalendar";
+import { ChatBody } from "./ChatBody";
 import {
-  GOAL_LABELS,
-  ROLE_LABELS,
-  SKILL_FIELDS,
   formatSlot,
   toCourseContext,
   type ChatMessage,
@@ -23,6 +23,7 @@ export default function ChatInterview({ name, course, onReady }: Props) {
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [profile, setProfile] = useState<StructuredProfile | null>(null);
+  const [availSlots, setAvailSlots] = useState<string[]>([]);
   const scroller = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const ctx = toCourseContext(course);
@@ -51,35 +52,19 @@ export default function ChatInterview({ name, course, onReady }: Props) {
     return () => {
       cancelled = true;
     };
-    // Course context is stable for this mount.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [name, course.id]);
 
   const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant")?.content ?? "";
-  const askingSkillRating = /from 1 to 5|number from 1 to 5/i.test(lastAssistant);
-  const askingTeamRole = /lead, contribute, or either|lead, contribute, or are you fine/i.test(lastAssistant);
+  const askingAvail = /free to meet|when you can meet|mornings, afternoons|evenings/i.test(lastAssistant);
 
-  function parseSkillDraft(text: string): number | null {
-    const nums = text.match(/\d+/g)?.map(Number) ?? [];
-    if (nums.length !== 1) return null;
-    const n = nums[0];
-    return n >= 1 && n <= 5 ? n : null;
-  }
-
-  async function send() {
-    const text = draft.trim();
+  async function send(textOverride?: string) {
+    const text = (textOverride ?? draft).trim();
     if (!text || busy || profile) return;
-    if (askingSkillRating && parseSkillDraft(text) == null) {
-      setError("Enter a whole number from 1 to 5.");
-      return;
-    }
-    if (askingTeamRole && !/lead|contribut|either|support|no preference|don't mind|flexible/i.test(text)) {
-      setError("Please pick lead, contribute, or either.");
-      return;
-    }
     const next: ChatMessage[] = [...messages, { role: "user", content: text }];
     setMessages(next);
     setDraft("");
+    setAvailSlots([]);
     setBusy(true);
     setError(null);
     try {
@@ -97,7 +82,18 @@ export default function ChatInterview({ name, course, onReady }: Props) {
       setError(e instanceof Error ? e.message : "Couldn't send that message.");
     } finally {
       setBusy(false);
+      inputRef.current?.focus();
     }
+  }
+
+  function toggleAvail(slot: string) {
+    setAvailSlots((cur) => (cur.includes(slot) ? cur.filter((s) => s !== slot) : [...cur, slot]));
+  }
+
+  function sendAvail() {
+    if (availSlots.length === 0) return;
+    const ordered = availSlots.slice().sort();
+    void send(ordered.map(formatSlot).join(", "));
   }
 
   function onComposerKey(e: KeyboardEvent<HTMLTextAreaElement>) {
@@ -109,24 +105,23 @@ export default function ChatInterview({ name, course, onReady }: Props) {
 
   return (
     <div className="chat-wrap">
-      <p className="kicker">{course.name}</p>
-      <h1>How do you work?</h1>
-      <p className="page-dek">
-        A few short questions, one at a time — including each kind of work we match on.
-        Answer in your own words; we’ll save this and reuse it on other courses.
-      </p>
+      <div className="page-head">
+        <p className="kicker">{course.name}</p>
+        <h1>How do you work?</h1>
+        <p className="page-dek">Talk normally. I’ll pull out what I need and ask if something’s still unclear.</p>
+      </div>
 
       <div className="chat-panel">
         <div className="chat-thread" ref={scroller} role="log" aria-live="polite">
           {messages.map((m, i) => (
             <div key={`${m.role}-${i}`} className={`bubble ${m.role}`}>
-              <span className="bubble-who">{m.role === "assistant" ? "CrewFit" : name}</span>
-              <p>{m.content}</p>
+              <span className="bubble-who">{m.role === "assistant" ? "Assistant" : name}</span>
+              <ChatBody text={m.content} />
             </div>
           ))}
           {busy && (
             <div className="bubble assistant">
-              <span className="bubble-who">CrewFit</span>
+              <span className="bubble-who">Assistant</span>
               <p className="typing">Thinking…</p>
             </div>
           )}
@@ -135,56 +130,48 @@ export default function ChatInterview({ name, course, onReady }: Props) {
         {error && <div className="error-banner chat-error">{error}</div>}
 
         {!profile && (
-          <div className="chat-composer">
-            <textarea
-              ref={inputRef}
-              rows={2}
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={onComposerKey}
-              placeholder={
-                askingSkillRating
-                  ? "Type a number from 1 to 5"
-                  : askingTeamRole
-                    ? "Lead, contribute, or either"
-                    : "Write a normal reply…"
-              }
-              disabled={busy}
-            />
-            <button className="btn primary" type="button" disabled={!draft.trim() || busy} onClick={() => void send()}>
-              Send
-            </button>
-          </div>
+          <>
+            {askingAvail && (
+              <div className="avail-composer">
+                <AvailCalendar slots={availSlots} onToggle={toggleAvail} />
+                <button
+                  className="btn ghost"
+                  type="button"
+                  disabled={busy || availSlots.length === 0}
+                  onClick={sendAvail}
+                >
+                  Use these slots
+                </button>
+              </div>
+            )}
+            <div className="chat-composer">
+              <textarea
+                ref={inputRef}
+                rows={3}
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                onKeyDown={onComposerKey}
+                placeholder="Type anything — a sentence or a whole paragraph."
+                disabled={busy}
+              />
+              <button className="btn primary" type="button" disabled={!draft.trim() || busy} onClick={() => void send()}>
+                Send
+              </button>
+            </div>
+          </>
         )}
 
         {profile && (
           <div className="chat-ready">
-            <h3>Saved — we’ll reuse this across courses</h3>
-            <dl className="mini-facts">
-              <div>
-                <dt>Goal</dt>
-                <dd>{GOAL_LABELS[profile.goal]}</dd>
-              </div>
-              <div>
-                <dt>Hours / week</dt>
-                <dd>{profile.hours}</dd>
-              </div>
-              <div>
-                <dt>On a team</dt>
-                <dd>{ROLE_LABELS[profile.role]}</dd>
-              </div>
-            </dl>
-            <p className="avail-preview">{profile.availability.slice(0, 8).map(formatSlot).join(" · ")}</p>
-            <div className="skill-pills">
-              {SKILL_FIELDS.map((s) => (
-                <span key={s.key}>
-                  {s.label} {profile.skills[s.key]}
-                </span>
-              ))}
+            <div className="cta-card nested">
+              <p className="kicker">Ready</p>
+              <h3>Profile saved</h3>
+              <p>We’ll match you on hours, goals, and skills — not on a personality quiz dump.</p>
+              <button className="btn primary lg" type="button" onClick={() => onReady(profile)}>
+                Find my team
+              </button>
             </div>
-            <button className="btn primary" type="button" onClick={() => onReady(profile)}>
-              Find my team in {course.name}
-            </button>
+            <ProfileCard profile={profile} compact />
           </div>
         )}
       </div>
