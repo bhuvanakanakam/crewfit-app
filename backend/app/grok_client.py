@@ -11,9 +11,9 @@ Three call sites, matching the PRD:
   3. generate_rationale()   a solved team's score breakdown -> a one-line
                              human explanation
 
-If XAI_API_KEY isn't set, each function falls back to a plain heuristic so
-the rest of the app is runnable and demoable with zero setup — swap in your
-key in .env and every response starts coming from Grok instead.
+If no decrypted XAI key is available, each function falls back to a plain
+heuristic so the rest of the app is runnable with zero setup. Store the key
+encrypted as XAI_API_KEY_ENCRYPTED in .env.shared (see app/crypto_secret.py).
 """
 
 import json
