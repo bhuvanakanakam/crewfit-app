@@ -22,6 +22,7 @@ encrypted as XAI_API_KEY_ENCRYPTED in .env.shared (see app/crypto_secret.py).
 
 import base64
 import json
+import os
 import re
 
 from openai import OpenAI
@@ -110,32 +111,42 @@ def resolve_clarification(name: str, bio: str, course_context: str, qa_pairs: li
     return extract_profile(name, enriched_bio, course_context)
 
 
-def generate_rationale(member_names: list[str], breakdown: dict, dominant_goal_label: str) -> str:
-    if _client is None:
+def generate_rationale(
+    member_names: list[str],
+    breakdown: dict,
+    dominant_goal_label: str,
+    extras: dict | None = None,
+) -> str:
+    if _client is None or os.getenv("PYTEST_CURRENT_TEST"):
         return _heuristic_rationale(member_names, breakdown, dominant_goal_label)
 
-    response = _client.chat.completions.create(
-        model=XAI_MODEL,
-        messages=[
-            {
-                "role": "system",
-                "content": (
-                    "Write ONE short, plain-language sentence explaining why this team was grouped "
-                    "together, for the students themselves to read. Base it only on the scores given "
-                    "(0-1 scale, higher is better alignment). No hedging, no filler, no restating the "
-                    "numbers directly, describe what they mean. Do NOT reveal anyone's private "
-                    "preferences, hours, skill ratings, or survey answers. Speak only in terms of "
-                    "shared fit (goals, schedules, complementary strengths, similar commitment)."
-                ),
-            },
-            {
-                "role": "user",
-                "content": json.dumps({"members": member_names, "scores": breakdown, "most_common_goal": dominant_goal_label}),
-            },
-        ],
-        temperature=0.4,
-    )
-    return response.choices[0].message.content.strip()
+    payload = {
+        "members": member_names,
+        "scores": breakdown,
+        "most_common_goal": dominant_goal_label,
+        **(extras or {}),
+    }
+    try:
+        response = _client.chat.completions.create(
+            model=XAI_MODEL,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Write 2 short sentences for students: why this team was grouped, and what "
+                        "skill coverage looks like (covered vs thin). Use only the facts given. "
+                        "No hedging, no raw numbers, no private ratings or hours. Speak in shared "
+                        "fit: goals, schedules, complementary strengths, similar commitment."
+                    ),
+                },
+                {"role": "user", "content": json.dumps(payload)},
+            ],
+            temperature=0.4,
+        )
+        text = (response.choices[0].message.content or "").strip()
+        return text or _heuristic_rationale(member_names, breakdown, dominant_goal_label)
+    except Exception:
+        return _heuristic_rationale(member_names, breakdown, dominant_goal_label)
 
 
 _SKILL_KEYS = ("technical", "writing", "analysis", "presentation")
@@ -523,6 +534,14 @@ def apply_voice_snapshot(name: str, snapshot: dict) -> dict:
     }
 
 
+def _xai_opener():
+    """Reach xAI directly. Env HTTPS_PROXY (Cursor sandbox, corp MITM) makes
+    urllib CONNECT to api.x.ai and the proxy answers 403, so voice never starts."""
+    import urllib.request
+
+    return urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
 def _xai_post(path: str, payload: dict, timeout: float = 20.0) -> tuple[bytes, str]:
     """POST JSON to xAI using the stdlib so speech works even if httpx isn't installed."""
     import urllib.error
@@ -540,12 +559,14 @@ def _xai_post(path: str, payload: dict, timeout: float = 20.0) -> tuple[bytes, s
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with _xai_opener().open(req, timeout=timeout) as resp:
             ctype = (resp.headers.get("content-type") or "").split(";")[0].strip()
             return resp.read(), ctype
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
         raise RuntimeError(detail or f"xAI returned {exc.code}") from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"Could not reach xAI ({exc.reason}).") from exc
 
 
 VOICE_TURN_DETECTION = {

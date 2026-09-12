@@ -8,16 +8,14 @@ export function isAuth0Configured() {
 }
 
 export function displayNameFromUser(user: User): string {
-  const given = user.given_name?.trim();
-  if (given) return given;
+  const email = user.email?.trim();
+  const name = user.name?.trim();
+  if (name && name !== email) return name;
+  const full = [user.given_name, user.family_name].filter(Boolean).join(" ").trim();
+  if (full) return full;
   const nick = user.nickname?.trim();
   if (nick && !nick.includes("@")) return nick;
-  const name = user.name?.trim();
-  if (name && name !== user.email) {
-    const first = name.split(/\s+/)[0];
-    if (first) return first;
-  }
-  const fromEmail = user.email?.split("@")[0]?.trim();
+  const fromEmail = email?.split("@")[0]?.trim();
   if (fromEmail) return fromEmail;
   return "You";
 }

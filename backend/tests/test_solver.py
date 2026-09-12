@@ -178,3 +178,16 @@ def test_eight_and_sixteen_optimal():
             / len(result.teams),
             abs=1e-6,
         )
+
+
+def test_forced_team_count_splits_evenly():
+    people = [person(f"p{i}") for i in range(20)]
+    assert legal_team_sizes(20, 3, 4, team_count=5) == [4, 4, 4, 4, 4]
+    teams = solve_teams(people, 3, 4, set(), team_count=5)
+    assert len(teams) == 5
+    assert all(len(team) == 4 for team in teams)
+
+
+def test_forced_team_count_rejects_impossible():
+    with pytest.raises(RuntimeError, match="Can't make 6 teams"):
+        feasible_team_count(20, 4, 4, team_count=6)

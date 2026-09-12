@@ -1,10 +1,18 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { CalendarDays, Mic, MicOff, Users } from "lucide-react";
 import { sendChat } from "../api";
-import ProfileCard from "./ProfileCard";
-import AvailCalendar from "./AvailCalendar";
 import { ChatBody } from "./ChatBody";
+import Chip from "./Chip";
+import PageIntro from "./PageIntro";
+import TerminalChrome from "./TerminalChrome";
+import { SkillBars, WeekCalendar } from "./WeekCalendar";
+import { Button } from "./ui/button";
 import {
+  CONFLICT_LABELS,
+  GOAL_LABELS,
   INTERVIEWER_NAME,
+  ROLE_LABELS,
+  courseSkillFields,
   formatSlot,
   toCourseContext,
   type ChatMessage,
@@ -51,12 +59,12 @@ export default function ChatInterview({ name, course, onReady }: Props) {
   profileRef.current = profile;
   messagesRef.current = messages;
   const scroller = useRef<HTMLDivElement>(null);
-  const bottomRef = useRef<HTMLDivElement>(null);
   const reviewRef = useRef<HTMLDivElement>(null);
   const pinThread = useRef(true);
-  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
   const talkRef = useRef<TalkSession | null>(null);
   const ctx = toCourseContext(course);
+  const skillFields = courseSkillFields(course);
 
   function commit(next: Turn[]) {
     messagesRef.current = next;
@@ -94,13 +102,12 @@ export default function ChatInterview({ name, course, onReady }: Props) {
   }
 
   function applyProfile(raw: StructuredProfile, nextMessages: ChatMessage[]) {
-    const next = {
+    enterConfirm({
       ...raw,
       id: raw.id || "you",
       name,
       bio: raw.bio || nextMessages.filter((m) => m.role === "user").map((m) => m.content).join("\n"),
-    };
-    enterConfirm(next);
+    });
   }
 
   function syncProfile(next: ChatMessage[]) {
@@ -180,7 +187,7 @@ export default function ChatInterview({ name, course, onReady }: Props) {
     if (!pinThread.current) return;
     const node = scroller.current;
     if (node) node.scrollTop = node.scrollHeight;
-  }, [messages, busy]);
+  }, [messages, busy, profile]);
 
   useEffect(() => {
     let cancelled = false;
@@ -207,8 +214,11 @@ export default function ChatInterview({ name, course, onReady }: Props) {
   }, [name, course.id]);
 
   const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant")?.content ?? "";
+  // The opener lists "schedule" among the things he'll look for, so the topic alone is not
+  // enough: he has to actually be asking before the week grid is any use.
   const askingAvail =
-    /free to meet|when you can meet|mornings|afternoons|evenings|schedule|availab|meet during|time of day|windows/i.test(
+    lastAssistant.includes("?") &&
+    /free to meet|can you meet|when you can meet|reliably meet|meet during|mornings|afternoons|evenings|schedule|availab|times? of day|what times|which times|windows/i.test(
       lastAssistant,
     );
 
@@ -237,7 +247,7 @@ export default function ChatInterview({ name, course, onReady }: Props) {
     if (voiceOn && talkRef.current && phase === "interview") {
       if (!talkRef.current.sendText(text)) {
         setDraft(text);
-        setError("Let Scotty finish, then send that.");
+        setError(`Let ${INTERVIEWER_NAME} finish, then send that.`);
         return;
       }
       commit(next);
@@ -295,17 +305,13 @@ export default function ChatInterview({ name, course, onReady }: Props) {
     }
   }
 
-  function toggleAvail(slot: string) {
-    setAvailSlots((cur) => (cur.includes(slot) ? cur.filter((s) => s !== slot) : [...cur, slot]));
-  }
-
   function sendAvail() {
     if (availSlots.length === 0) return;
     void send(availSlots.slice().sort().map(formatSlot).join(", "));
   }
 
-  function onComposerKey(e: KeyboardEvent<HTMLTextAreaElement>) {
-    if (e.key === "Enter" && !e.shiftKey) {
+  function onComposerKey(e: KeyboardEvent<HTMLInputElement>) {
+    if (e.key === "Enter") {
       e.preventDefault();
       void send();
     }
@@ -317,7 +323,7 @@ export default function ChatInterview({ name, course, onReady }: Props) {
     talkStatus === "connecting"
       ? "Connecting voice…"
       : talkStatus === "speaking"
-        ? "Scotty is talking. Mic paused so he isn’t interrupted."
+        ? `${INTERVIEWER_NAME} is talking. Mic paused so he isn’t interrupted.`
         : talkStatus === "listening"
           ? "Your turn. Speak, or type and he’ll answer out loud."
           : inReview
@@ -325,114 +331,176 @@ export default function ChatInterview({ name, course, onReady }: Props) {
             : "Voice off. Toggle on for a spoken back-and-forth.";
 
   return (
-    <div className="chat-wrap">
-      <div className="page-head">
-        <p className="kicker">{course.name}</p>
-        <h1>How do you work?</h1>
-        <p className="page-dek">
-          Type anytime. Voice is a turn-taking conversation: you speak, captions follow, then
-          Scotty talks. The mic waits until he’s done.
-        </p>
-      </div>
+    <div className="space-y-6">
+      <PageIntro
+        kicker="How do you work?"
+        title="A short conversation, then we match."
+        body={`${INTERVIEWER_NAME}, a Grok powered AI assistant, runs this. Type anytime, or switch voice on for a spoken back-and-forth. Your answers stay private.`}
+      />
 
-      <div className="chat-panel">
-        <div className="chat-thread" ref={scroller} role="log" aria-live="polite" onScroll={onThreadScroll}>
+      <TerminalChrome title={`chat with ${INTERVIEWER_NAME.toLowerCase()}`} bodyClassName="space-y-4 p-5 sm:p-7">
+        <div
+          className="max-h-[55vh] space-y-4 overflow-y-auto"
+          ref={scroller}
+          role="log"
+          aria-live="polite"
+          onScroll={onThreadScroll}
+        >
           {messages
             .filter((m) => m.content.trim())
-            .map((m, i) => (
-              <div
-                key={m.voiceId ?? `${m.role}-${i}`}
-                className={`bubble ${m.role}${m.pending ? " live" : ""}`}
-              >
-                <span className="bubble-who">{m.role === "assistant" ? INTERVIEWER_NAME : name}</span>
-                <ChatBody text={m.content} />
-              </div>
-            ))}
+            .map((m, i) =>
+              m.role === "assistant" ? (
+                <div
+                  key={m.voiceId ?? `${m.role}-${i}`}
+                  className={`max-w-[90%] rounded-xl border bg-background/80 px-4 py-3 font-mono text-sm ${m.pending ? "border-primary/60" : ""}`}
+                >
+                  <span className="mb-1 block text-[10px] font-bold uppercase tracking-wide text-primary">
+                    {INTERVIEWER_NAME}
+                  </span>
+                  <ChatBody text={m.content} />
+                  {m.pending && <span className="animate-pulse text-primary">▌</span>}
+                </div>
+              ) : (
+                <div
+                  key={m.voiceId ?? `${m.role}-${i}`}
+                  className="ml-auto max-w-[86%] rounded-xl bg-primary px-4 py-3 font-mono text-sm text-primary-foreground"
+                >
+                  <ChatBody text={m.content} />
+                </div>
+              ),
+            )}
           {busy && (
-            <div className="bubble assistant">
-              <span className="bubble-who">{INTERVIEWER_NAME}</span>
-              <p className="typing">Thinking…</p>
+            <div className="max-w-[90%] rounded-xl border bg-background/80 px-4 py-3 font-mono text-sm text-muted-foreground">
+              Thinking…
             </div>
           )}
-          <div ref={bottomRef} />
         </div>
 
-        {error && <div className="error-banner chat-error">{error}</div>}
+        {error && <p className="rounded-md bg-warn-soft p-3 font-mono text-sm text-warn">{error}</p>}
 
-        {inReview && profile && (
-          <div className="chat-ready" ref={reviewRef}>
-            <div className="cta-card nested">
-              <p className="kicker">Personality evaluation</p>
-              <h3>{locked ? "Locked in" : "Here’s the picture so far"}</h3>
-              <p>
-                {locked
-                  ? "Scotty’s done. This is what we’ll use to find your team."
-                  : "Does this look right? Yes and we’re done. If not, tell Scotty what to change."}
-              </p>
-              {notes.length > 0 && !locked && (
-                <ul className="review-notes">
-                  {notes.map((n) => (
-                    <li key={n}>{n}</li>
-                  ))}
-                </ul>
-              )}
-              {!locked && (
-                <button className="btn primary lg" type="button" onClick={() => finishInterview(profile)}>
-                  Yes, find my team
-                </button>
-              )}
+        {!inReview && askingAvail && !voiceOn && (
+          <div className="border-t border-primary/20 pt-5">
+            <div className="mb-4 flex items-center justify-between">
+              <div>
+                <h3 className="font-mono text-lg font-semibold tracking-[-0.03em]">Your week</h3>
+                <p className="text-sm text-muted-foreground">Click the times you can reliably meet.</p>
+              </div>
+              <CalendarDays className="text-primary" />
             </div>
-            <ProfileCard profile={profile} compact />
-          </div>
-        )}
-
-        {askingAvail && !voiceOn && (
-          <div className="avail-composer">
-            <AvailCalendar slots={availSlots} onToggle={toggleAvail} />
-            <button className="btn ghost" type="button" disabled={busy || availSlots.length === 0} onClick={sendAvail}>
+            <WeekCalendar
+              slots={availSlots}
+              onToggle={(slot) => setAvailSlots((cur) => (cur.includes(slot) ? cur.filter((s) => s !== slot) : [...cur, slot]))}
+            />
+            <Button className="mt-4" variant="outline" disabled={busy || availSlots.length === 0} onClick={sendAvail}>
               Use these slots
-            </button>
+            </Button>
           </div>
         )}
 
         {!locked && (
-        <div className="chat-composer">
-          <p className="talk-live">{voiceHint}</p>
-          <textarea
-            ref={inputRef}
-            rows={3}
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={onComposerKey}
-            placeholder={
-              phase === "confirm"
-                ? "Yes, or tell me what to change…"
-                : "e.g. I want an A, I code most nights, writing isn’t my thing…"
-            }
-            disabled={busy && !voiceOn}
-          />
-          <div className="composer-actions">
-            <label className={`voice-switch${voiceOn ? " on" : ""}`}>
+          <div className="border-t border-primary/20 pt-4">
+            <p className="mb-3 font-mono text-xs text-muted-foreground">{voiceHint}</p>
+            <div className="flex gap-3">
+              <span className="hidden items-center font-mono text-primary sm:flex">$</span>
               <input
-                type="checkbox"
-                checked={voiceOn}
-                onChange={(e) => void setVoiceEnabled(e.target.checked)}
+                ref={inputRef}
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                onKeyDown={onComposerKey}
+                placeholder={phase === "confirm" ? "Yes, or tell me what to change…" : "write a short answer…"}
+                disabled={busy && !voiceOn}
+                className="h-11 flex-1 rounded-md border border-primary/25 bg-background px-3 font-mono text-sm outline-none ring-ring focus-visible:ring-2"
               />
-              <span className="voice-switch-track" aria-hidden="true" />
-              <span className="voice-switch-label">Voice</span>
-            </label>
-            <button
-              className="btn primary"
-              type="button"
-              disabled={!draft.trim() || (busy && !voiceOn)}
-              onClick={() => void send()}
-            >
-              Send
-            </button>
+              <Button
+                variant={voiceOn ? "default" : "outline"}
+                aria-pressed={voiceOn}
+                title={voiceOn ? "Turn voice off" : "Turn voice on"}
+                onClick={() => void setVoiceEnabled(!voiceOn)}
+              >
+                {voiceOn ? <Mic /> : <MicOff />} voice
+              </Button>
+              <Button disabled={!draft.trim() || (busy && !voiceOn)} onClick={() => void send()}>
+                send
+              </Button>
+            </div>
           </div>
-        </div>
         )}
-      </div>
+      </TerminalChrome>
+
+      {inReview && profile && (
+        <div className="grid gap-5 md:grid-cols-[1fr_290px]" ref={reviewRef}>
+          <section className="rounded-2xl border bg-card p-6 paper-shadow">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <div className="kicker">Personality evaluation</div>
+                <h2 className="mt-1 font-display text-2xl font-medium tracking-[-0.03em]">
+                  {locked ? "Locked in" : "Here’s the picture so far"}
+                </h2>
+              </div>
+              <Chip tone={locked ? "good" : "accent"}>{locked ? "Saved" : "Draft"}</Chip>
+            </div>
+            <dl className="mt-6 grid gap-5 sm:grid-cols-2">
+              <div>
+                <dt className="text-xs font-bold uppercase text-muted-foreground">Goal</dt>
+                <dd className="mt-1 text-lg font-semibold">{GOAL_LABELS[profile.goal]}</dd>
+              </div>
+              <div>
+                <dt className="text-xs font-bold uppercase text-muted-foreground">Hours</dt>
+                <dd className="mt-1 text-lg font-semibold">{profile.hours} per week</dd>
+              </div>
+              <div>
+                <dt className="text-xs font-bold uppercase text-muted-foreground">Team role</dt>
+                <dd className="mt-1 text-lg font-semibold">{ROLE_LABELS[profile.role]}</dd>
+              </div>
+              <div>
+                <dt className="text-xs font-bold uppercase text-muted-foreground">Conflict style</dt>
+                <dd className="mt-1 text-lg font-semibold">{CONFLICT_LABELS[profile.conflict_mode]}</dd>
+              </div>
+            </dl>
+            <div className="mt-7 border-t pt-6">
+              <p className="mb-4 font-semibold">Skill confidence</p>
+              <SkillBars
+                privateView
+                skills={profile.skills}
+                keys={skillFields.map((s) => s.key)}
+                labels={course.skill_labels}
+              />
+            </div>
+            <div className="mt-7 border-t pt-6">
+              <p className="mb-4 font-semibold">When you can meet</p>
+              <WeekCalendar slots={profile.availability} compact />
+            </div>
+          </section>
+
+          <aside className="rounded-2xl border bg-foreground p-6 text-primary-foreground paper-shadow">
+            <Users className="text-peach" />
+            <h2 className="mt-8 font-display text-2xl font-medium tracking-[-0.03em]">
+              {locked ? "Finding your team…" : "Does this look right?"}
+            </h2>
+            <p className="mt-2 text-sm opacity-75">
+              {locked
+                ? `${INTERVIEWER_NAME} is done. This is what we’ll use to find your team.`
+                : `Yes and we’re done. If not, tell ${INTERVIEWER_NAME} what to change and he’ll fix it here.`}
+            </p>
+            {notes.length > 0 && !locked && (
+              <ul className="mt-4 list-disc space-y-1 pl-4 text-sm opacity-75">
+                {notes.map((n) => (
+                  <li key={n}>{n}</li>
+                ))}
+              </ul>
+            )}
+            {!locked && (
+              <Button
+                size="lg"
+                className="mt-6 w-full bg-card text-foreground hover:bg-accent-soft"
+                onClick={() => finishInterview(profile)}
+              >
+                Yes, find my team <Users />
+              </Button>
+            )}
+          </aside>
+        </div>
+      )}
     </div>
   );
 }

@@ -1,0 +1,209 @@
+@import "tailwindcss" source(none);
+@source ".";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --font-display: "IBM Plex Mono", ui-monospace, monospace;
+  --font-sans: "IBM Plex Mono", ui-monospace, monospace;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+  --radius-sm: 0.5rem;
+  --radius-md: 0.75rem;
+  --radius-lg: 1rem;
+  --radius-xl: 1.25rem;
+  --radius-2xl: 1.5rem;
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-strong: var(--primary-strong);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-good: var(--good);
+  --color-good-soft: var(--good-soft);
+  --color-warn: var(--warn);
+  --color-warn-soft: var(--warn-soft);
+  --color-peach: var(--peach);
+  --color-sand: var(--sand);
+  --color-coral: var(--coral);
+}
+
+:root,
+[data-theme="day"],
+[data-theme="dusk"],
+[data-theme="overcast"] {
+  --radius: 0.75rem;
+  --background: #f3eee9;
+  --foreground: #2a221f;
+  --card: #fbf7f3;
+  --card-foreground: #2a221f;
+  --popover: #fbf7f3;
+  --popover-foreground: #2a221f;
+  --primary: #b56e67;
+  --primary-strong: #8f524c;
+  --primary-foreground: #fff8f6;
+  --secondary: #ece4de;
+  --secondary-foreground: #2a221f;
+  --muted: #ece4de;
+  --muted-foreground: #6a5f5a;
+  --accent: #b56e67;
+  --accent-soft: #f4e6e3;
+  --accent-foreground: #fff8f6;
+  --destructive: #9a4540;
+  --destructive-foreground: #fff8f6;
+  --border: #d8cdc6;
+  --input: #d8cdc6;
+  --ring: #b56e67;
+  --good: #6a7a62;
+  --good-soft: #e7ebe3;
+  --warn: #9a6b32;
+  --warn-soft: #f4ead4;
+  --peach: #c48982;
+  --sand: #ece4de;
+  --coral: #b56e67;
+  --bg-image: none;
+}
+
+@layer base {
+  * {
+    border-color: var(--color-border);
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    margin: 0;
+    color: var(--foreground);
+    font-family: var(--font-sans);
+    font-feature-settings: "ss01" on;
+    letter-spacing: 0;
+    line-height: 1.55;
+    background-color: var(--background);
+    background-attachment: fixed;
+    background-image: var(--bg-image, none);
+  }
+
+  h1,
+  h2,
+  h3,
+  .font-display {
+    letter-spacing: -0.04em;
+  }
+
+  #root {
+    position: relative;
+    z-index: 1;
+  }
+
+  body::after {
+    content: none;
+  }
+
+  button,
+  input,
+  textarea,
+  select {
+    letter-spacing: 0;
+    font-family: inherit;
+  }
+
+  ::selection {
+    background: var(--accent);
+    color: var(--accent-foreground);
+  }
+}
+
+@utility paper-shadow {
+  box-shadow:
+    0 0 0 1px color-mix(in oklab, var(--foreground) 8%, transparent),
+    0 18px 40px color-mix(in oklab, var(--foreground) 6%, transparent);
+}
+
+@utility font-display {
+  font-family: var(--font-display);
+  font-optical-sizing: auto;
+}
+
+@utility font-mono {
+  font-family: var(--font-mono);
+}
+
+@utility page-title {
+  font-family: var(--font-mono);
+  font-size: clamp(1.8rem, 3.6vw, 2.5rem);
+  font-weight: 600;
+  line-height: 1.1;
+  letter-spacing: -0.04em;
+}
+
+@utility kicker {
+  color: var(--primary);
+  font-family: var(--font-mono);
+  font-size: 0.875rem;
+  line-height: 1.2rem;
+  font-weight: 600;
+  text-transform: none;
+  letter-spacing: 0.04em;
+}
+
+@keyframes crew-pulse {
+  0%,
+  100% {
+    transform: scale(0.82);
+    opacity: 0.45;
+  }
+  50% {
+    transform: scale(1.15);
+    opacity: 1;
+  }
+}
+
+@utility crew-pulse {
+  animation: crew-pulse 1.15s ease-in-out infinite;
+}
+
+@keyframes term-blink {
+  0%,
+  45% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0;
+  }
+}
+
+@utility term-cursor {
+  display: inline-block;
+  width: 0.55ch;
+  height: 1em;
+  margin-left: 0.15ch;
+  background: var(--primary);
+  animation: term-blink 1.05s steps(1) infinite;
+  vertical-align: -0.12em;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}

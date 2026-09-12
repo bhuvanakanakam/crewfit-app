@@ -1,6 +1,10 @@
 import { useEffect, useRef, useState } from "react";
+import { Bell, X } from "lucide-react";
 import { listNotifications, markNotificationsRead, resolveConcern } from "../api";
 import type { NotificationRecord } from "../types";
+import Chip from "./Chip";
+import { Button } from "./ui/button";
+import { cn } from "../lib/utils";
 
 interface Props {
   courseId: string;
@@ -19,6 +23,17 @@ const KIND_LABEL: Record<NotificationRecord["kind"], string> = {
   team: "Team",
   staff: "Roster",
 };
+
+function relTime(iso: string) {
+  const then = Date.parse(iso);
+  if (!Number.isFinite(then)) return "";
+  const mins = Math.max(0, Math.round((Date.now() - then) / 60000));
+  if (mins < 1) return "now";
+  if (mins < 60) return `${mins}m`;
+  const hours = Math.round(mins / 60);
+  if (hours < 24) return `${hours}h`;
+  return `${Math.round(hours / 24)}d`;
+}
 
 export default function NotifyMenu({ courseId, name, role, onOpenStudent, onOpenTeam, onChanged }: Props) {
   const [open, setOpen] = useState(false);
@@ -83,41 +98,49 @@ export default function NotifyMenu({ courseId, name, role, onOpenStudent, onOpen
     }
   }
 
+  const warn = (n: NotificationRecord) => n.kind === "concern" || n.kind === "score_drop";
+
   return (
-    <div className="header-notify" ref={wrap}>
-      <button
-        type="button"
-        className={`notify-btn${open ? " open" : ""}`}
+    <div className="relative" ref={wrap}>
+      <Button
+        variant="ghost"
+        size="icon"
+        className="relative"
         aria-label={unread.length ? `${unread.length} notifications` : "Notifications"}
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
       >
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden>
-          <path
-            d="M6 9a6 6 0 1 1 12 0c0 7 3 9 3 9H3s3-2 3-9Z"
-            stroke="currentColor"
-            strokeWidth="1.8"
-            strokeLinejoin="round"
-          />
-          <path d="M10 20a2 2 0 0 0 4 0" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-        </svg>
-        {unread.length > 0 && <span className="notify-badge">{unread.length}</span>}
-      </button>
+        <Bell />
+        {unread.length > 0 && (
+          <span className="absolute right-1 top-1 grid size-4 place-items-center rounded-full bg-coral text-[10px] text-white">
+            {unread.length > 9 ? "9+" : unread.length}
+          </span>
+        )}
+      </Button>
 
       {open && (
-        <div className="notify-panel" role="menu" aria-label="Notifications">
-          <div className="notify-head">Notifications</div>
-          {items.length === 0 ? (
-            <p className="notify-empty">Nothing new.</p>
-          ) : (
-            items.map((n) => (
-              <article className={`notify-item${n.read ? " read" : ""}`} key={n.id}>
-                <button
-                  type="button"
-                  className="notify-body"
+        <aside className="fixed right-3 top-[5.75rem] z-50 w-[calc(100%-1.5rem)] max-w-[380px] overflow-hidden rounded-2xl border bg-card paper-shadow sm:right-6">
+          <div className="flex items-center justify-between border-b p-5">
+            <div>
+              <div className="kicker">This course</div>
+              <h2 className="font-display text-xl font-medium tracking-[-0.03em]">Notifications</h2>
+            </div>
+            <Button variant="ghost" size="icon" aria-label="Close notifications" onClick={() => setOpen(false)}>
+              <X />
+            </Button>
+          </div>
+          <div className="max-h-[520px] overflow-y-auto p-2">
+            {items.length === 0 ? (
+              <p className="p-4 text-sm text-muted-foreground">Nothing new.</p>
+            ) : (
+              items.map((n) => (
+                <Button
+                  key={n.id}
+                  variant="ghost"
+                  className="h-auto w-full items-start justify-start whitespace-normal rounded-xl p-3 text-left"
                   onClick={() => {
                     void markRead([n.id]);
-                    if (role === "teacher" && (n.student || n.to_name)) {
+                    if (role === "teacher" && warn(n) && (n.student || n.to_name)) {
                       onOpenStudent?.(n.student || n.to_name);
                     } else {
                       onOpenTeam?.();
@@ -125,34 +148,42 @@ export default function NotifyMenu({ courseId, name, role, onOpenStudent, onOpen
                     setOpen(false);
                   }}
                 >
-                  <span className={`notify-kind ${n.kind}`}>{KIND_LABEL[n.kind] ?? n.kind}</span>
-                  <strong>{n.title}</strong>
-                  <p>{n.body}</p>
-                </button>
-                {role === "teacher" && (n.kind === "concern" || n.kind === "score_drop") && n.student && (
-                  <div className="notify-actions">
-                    <button
-                      type="button"
-                      className="btn primary"
-                      disabled={busy !== null}
-                      onClick={() => void decide(n, "approved")}
-                    >
-                      {busy === `${n.id}:approved` ? "…" : "Approve rematch"}
-                    </button>
-                    <button
-                      type="button"
-                      className="btn ghost"
-                      disabled={busy !== null}
-                      onClick={() => void decide(n, "denied")}
-                    >
-                      Dismiss
-                    </button>
-                  </div>
-                )}
-              </article>
-            ))
-          )}
-        </div>
+                  <span className={cn("mt-1 block size-2 shrink-0 rounded-full", warn(n) ? "bg-warn" : "bg-primary")} />
+                  <span className="min-w-0 flex-1">
+                    <span className="flex items-center gap-2">
+                      <Chip tone={warn(n) ? "warn" : "accent"}>{KIND_LABEL[n.kind] ?? n.kind}</Chip>
+                      <span className="text-xs font-normal text-muted-foreground">{relTime(n.created_at)}</span>
+                    </span>
+                    <strong className="mt-2 block font-semibold">{n.title}</strong>
+                    <span className="mt-0.5 block text-sm font-normal text-muted-foreground">{n.body}</span>
+                    {role === "teacher" && warn(n) && n.student && (
+                      <span className="mt-3 flex gap-2">
+                        <span
+                          className="rounded-full bg-primary px-3 py-1 text-xs text-primary-foreground"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void decide(n, "approved");
+                          }}
+                        >
+                          {busy === `${n.id}:approved` ? "…" : "Approve rematch"}
+                        </span>
+                        <span
+                          className="rounded-full border px-3 py-1 text-xs"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void decide(n, "denied");
+                          }}
+                        >
+                          Dismiss
+                        </span>
+                      </span>
+                    )}
+                  </span>
+                </Button>
+              ))
+            )}
+          </div>
+        </aside>
       )}
     </div>
   );

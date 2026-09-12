@@ -1,14 +1,18 @@
 import copy
+import hashlib
 import re
+import secrets
 import sys
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 
+from . import config
 from .analysis import random_baseline_score, reoptimize_for_flag, team_stats
+from .auth0 import auth0_settings, name_from_claims, verify_id_token
 from .config import CORS_ORIGINS
 from .db import load_snapshot, save_snapshot
 from .facts import team_facts
@@ -17,6 +21,7 @@ from .grok_client import (
     chat_turn,
     create_voice_session,
     extract_profile,
+    generate_rationale,
     resolve_clarification,
     synthesize_speech,
     update_turn,
@@ -36,6 +41,7 @@ from .models import (
     FlagRequest,
     LoginRequest,
     LoginResponse,
+    RegisterRequest,
     MarkReadRequest,
     MatchRequest,
     MatchResponse,
@@ -65,7 +71,7 @@ from .models import (
 from .solver import solve_teams
 from .synthetic import generate_cohort
 
-app = FastAPI(title="CrewFit API", version="0.1.0")
+app = FastAPI(title="squadly API", version="0.1.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -92,15 +98,37 @@ _accounts: dict[str, Account] = {}
 # course_id -> { name_key: "teacher" | "ta" }
 _staff: dict[str, dict[str, str]] = {}
 _seq = 0
-_ROSTER_FILL = 16
+_COURSE_COHORT = 20
 _SCORE_DROP_PCT = 10.0
 _saving = False
 _DEMO_TEACHER = "Priya Chen"
-_DEMO_TA = "Alex Kim"
+_DEMO_INSTRUCTORS = ("Priya Chen", "Vamsi Grandhi")
+_DEMO_TEACHER_EMAIL = "priya.chen@squadly.edu"
+_DEMO_TEACHER_PASSWORD = "HackCMU-Priya-26"
+_DEMO_STUDENT = "Maya Singh"
+_DEMO_STUDENT_EMAIL = "maya.singh@squadly.edu"
+_DEMO_STUDENT_PASSWORD = "HackCMU-Maya-26"
+_RETIRED_TA = "Alex Kim"
 
 
 def _name_key(name: str) -> str:
     return name.strip().lower()
+
+
+def _hash_password(password: str, salt: str | None = None) -> str:
+    salt = salt or secrets.token_hex(16)
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 200_000).hex()
+    return f"pbkdf2${salt}${digest}"
+
+
+def _verify_password(password: str, stored: str) -> bool:
+    try:
+        kind, salt, digest = stored.split("$", 2)
+    except ValueError:
+        return False
+    if kind != "pbkdf2":
+        return False
+    return secrets.compare_digest(_hash_password(password, salt), stored)
 
 
 def _slug(name: str) -> str:
@@ -116,6 +144,8 @@ def _seed_courses() -> None:
             grading_notes="Collaborative project; teams of 3–4.",
             team_size_min=3,
             team_size_max=4,
+            objective="Ship a working demo with a team that can build, write, and pitch.",
+            focus_skills=["technical", "writing", "analysis", "presentation"],
         ),
         Course(
             id="15112",
@@ -123,6 +153,8 @@ def _seed_courses() -> None:
             grading_notes="Term project; teams of 3–4.",
             team_size_min=3,
             team_size_max=4,
+            objective="Term project: implement, write up, and present a working program.",
+            focus_skills=["technical", "writing", "analysis"],
         ),
         Course(
             id="17214",
@@ -130,6 +162,8 @@ def _seed_courses() -> None:
             grading_notes="Homework teams of 2–3.",
             team_size_min=2,
             team_size_max=3,
+            objective="Homework pairs that can design, implement, and review software.",
+            focus_skills=["technical", "analysis", "writing"],
         ),
     ]
     for course in seeds:
@@ -138,26 +172,205 @@ def _seed_courses() -> None:
         _staff.setdefault(course.id, {})
 
 
-def _ensure_account(name: str, home_role: str) -> Account:
-    key = _name_key(name)
-    existing = _accounts.get(key)
-    if existing is not None:
-        if home_role == "teacher" and existing.home_role != "teacher":
-            existing = existing.model_copy(update={"home_role": "teacher"})
-            _accounts[key] = existing
+_EMAIL_ALIASES = {
+    "priya.chen@dotslash.edu": "priya.chen@squadly.edu",
+    "maya.singh@dotslash.edu": "maya.singh@squadly.edu",
+}
+
+
+def _email_key(email: str) -> str:
+    return _EMAIL_ALIASES.get(email.strip().lower(), email.strip().lower())
+
+
+def _find_account(*, sub: str | None = None, email: str | None = None, name: str = "") -> Account | None:
+    if sub:
+        for acc in _accounts.values():
+            if acc.auth_sub == sub:
+                return acc
+    if email:
+        needle = _email_key(email)
+        for acc in _accounts.values():
+            if acc.email and _email_key(acc.email) == needle:
+                return acc
+    if name.strip():
+        return _accounts.get(_name_key(name))
+    return None
+
+
+def _bind_account(
+    name: str,
+    home_role: str,
+    *,
+    email: str | None = None,
+    auth_sub: str | None = None,
+    password_hash: str | None = None,
+) -> Account:
+    existing = _find_account(sub=auth_sub, email=email, name=name)
+    if existing is None:
+        acc = Account(
+            name=name.strip(),
+            home_role=home_role,  # type: ignore[arg-type]
+            created_at=_now(),
+            email=email.strip() if email else None,
+            auth_sub=auth_sub,
+            password_hash=password_hash,
+        )
+        _accounts[_name_key(acc.name)] = acc
+        return acc
+    updates: dict = {}
+    if auth_sub and existing.auth_sub != auth_sub:
+        updates["auth_sub"] = auth_sub
+    if email and (existing.email or "").strip().lower() != email.strip().lower():
+        updates["email"] = email.strip()
+    if password_hash and existing.password_hash != password_hash:
+        updates["password_hash"] = password_hash
+    if home_role == "teacher" and existing.home_role != "teacher":
+        updates["home_role"] = "teacher"
+    if not updates:
         return existing
-    acc = Account(name=name.strip(), home_role=home_role, created_at=_now())  # type: ignore[arg-type]
-    _accounts[key] = acc
-    return acc
+    existing = existing.model_copy(update=updates)
+    _accounts[_name_key(existing.name)] = existing
+    return existing
+
+
+def _ensure_account(name: str, home_role: str) -> Account:
+    return _bind_account(name, home_role)
+
+
+def _retire_seed_account(name: str) -> None:
+    key = _name_key(name)
+    _accounts.pop(key, None)
+    for members in _staff.values():
+        members.pop(key, None)
+    for bucket in _enroll.values():
+        bucket.discard(key)
+    _people.pop(key, None)
 
 
 def _seed_staff() -> None:
-    _ensure_account(_DEMO_TEACHER, "teacher")
-    _ensure_account(_DEMO_TA, "student")
-    for cid in _courses:
-        bucket = _staff.setdefault(cid, {})
-        bucket.setdefault(_name_key(_DEMO_TEACHER), "teacher")
-    _staff.setdefault("15112", {}).setdefault(_name_key(_DEMO_TA), "ta")
+    _retire_seed_account(_RETIRED_TA)
+    for name in _DEMO_INSTRUCTORS:
+        email = _DEMO_TEACHER_EMAIL if name == _DEMO_TEACHER else None
+        password_hash = _hash_password(_DEMO_TEACHER_PASSWORD) if name == _DEMO_TEACHER else None
+        acc = _accounts.get(_name_key(name))
+        if name == _DEMO_TEACHER and acc is not None and acc.password_hash:
+            password_hash = None
+        _bind_account(name, "teacher", email=email or (acc.email if acc else None), password_hash=password_hash)
+        for cid in _courses:
+            _staff.setdefault(cid, {}).setdefault(_name_key(name), "teacher")
+    student = _accounts.get(_name_key(_DEMO_STUDENT))
+    student_hash = None if student and student.password_hash else _hash_password(_DEMO_STUDENT_PASSWORD)
+    _bind_account(
+        _DEMO_STUDENT,
+        "student",
+        email=_DEMO_STUDENT_EMAIL,
+        password_hash=student_hash,
+    )
+    _enroll.setdefault("hackcmu", set()).add(_name_key(_DEMO_STUDENT))
+
+
+def _is_placeholder(profile: StructuredProfile | None) -> bool:
+    if profile is None:
+        return True
+    pid = (profile.id or "").strip()
+    if pid.startswith("enroll-") or pid.startswith("pending-") or pid in {"", "you"}:
+        return True
+    return (profile.bio or "").strip() == "Enrolled in the course."
+
+
+def _display_name(key: str) -> str:
+    acc = _accounts.get(key)
+    if acc and acc.name.strip():
+        return acc.name.strip()
+    person = _people.get(key)
+    if person and person.name.strip():
+        return person.name.strip()
+    return key.replace(".", " ").title()
+
+
+def _pending_profile(key: str) -> StructuredProfile:
+    return StructuredProfile.model_validate(
+        {
+            "id": f"pending-{key.replace(' ', '-')}",
+            "name": _display_name(key),
+            "bio": "",
+            "goal": "pass",
+            "availability": [],
+            "skills": {},
+            "hours": 1,
+        }
+    )
+
+
+def _ready_profiles(profiles: list[StructuredProfile]) -> list[StructuredProfile]:
+    return [p for p in profiles if not _is_placeholder(p)]
+
+
+def _fill_course_students(course: Course, count: int = _COURSE_COHORT, extra_exclude: set[str] | None = None) -> None:
+    staffed = set(_staff.get(course.id, {}))
+    bucket = _enroll.setdefault(course.id, set())
+    taken = set(bucket) | staffed
+    if extra_exclude:
+        taken |= {_name_key(n) for n in extra_exclude if n.strip()}
+    have = len([key for key in bucket if key not in staffed])
+    need = max(0, count - have)
+    if need == 0:
+        return
+    for profile in generate_cohort(
+        exclude_name="",
+        count=need,
+        seed=sum(ord(c) for c in course.id) * 17 + 7 + have * 31,
+        exclude_names=taken,
+        id_prefix=f"syn-{course.id}",
+        focus_skills=course.focus_skills,
+    ):
+        key = _name_key(profile.name)
+        if key in taken:
+            continue
+        _people[key] = profile
+        local = re.sub(r"[^a-z0-9]+", ".", key).strip(".")
+        _bind_account(profile.name, "student", email=f"{local}@cohort.squadly.local")
+        bucket.add(key)
+        taken.add(key)
+
+
+def _seed_course_cohort(course: Course, extra_exclude: set[str] | None = None, *, create: bool = False) -> None:
+    if course.cohort_seeded:
+        return
+    if create:
+        staffed = set(_staff.get(course.id, {}))
+        taken = set(_enroll.get(course.id, set())) | staffed
+        if extra_exclude:
+            taken |= {_name_key(n) for n in extra_exclude if n.strip()}
+        have = 0
+        for profile in generate_cohort(
+            exclude_name="",
+            count=_COURSE_COHORT,
+            seed=sum(ord(c) for c in course.id) * 17 + 7,
+            exclude_names=taken,
+            id_prefix=f"syn-{course.id}",
+            focus_skills=course.focus_skills,
+        ):
+            key = _name_key(profile.name)
+            if key in taken:
+                continue
+            _people[key] = profile
+            local = re.sub(r"[^a-z0-9]+", ".", key).strip(".")
+            _bind_account(profile.name, "student", email=f"{local}@cohort.squadly.local")
+            _enroll.setdefault(course.id, set()).add(key)
+            taken.add(key)
+            have += 1
+            if have >= _COURSE_COHORT:
+                break
+    else:
+        _fill_course_students(course, _COURSE_COHORT, extra_exclude)
+    course.cohort_seeded = True
+    _courses[course.id] = course
+
+
+def _seed_course_rosters() -> None:
+    for course in list(_courses.values()):
+        _seed_course_cohort(course)
 
 
 _seed_courses()
@@ -233,22 +446,57 @@ def _restore() -> None:
 
 _restore()
 _seed_staff()
+_seed_course_rosters()
+_save()
 
 
 def _course_view(course: Course, access: str, enrolled: bool = False) -> CourseView:
     return CourseView(
         id=course.id,
         name=course.name,
-        grading_notes=course.grading_notes or "",
+        grading_notes=course.objective or course.grading_notes or "",
         team_size_min=course.team_size_min,
         team_size_max=course.team_size_max,
+        team_count=course.team_count,
+        objective=course.objective or course.grading_notes or "",
+        focus_skills=course.focus_skills,
+        skill_labels=course.skill_labels,
         access=access,  # type: ignore[arg-type]
         enrolled=enrolled,
     )
 
 
-def _staff_kind_for(name: str, course_id: str | None = None) -> str | None:
+def _solve_roster(profiles, course_or_ctx, vetoes, time_limit_s: float = 10.0):
+    return solve_teams(
+        profiles,
+        course_or_ctx.team_size_min,
+        course_or_ctx.team_size_max,
+        vetoes,
+        time_limit_s=time_limit_s,
+        team_count=getattr(course_or_ctx, "team_count", None),
+        focus_skills=getattr(course_or_ctx, "focus_skills", None),
+    )
+
+
+def _course_prompt(course_or_ctx) -> str:
+    labels = getattr(course_or_ctx, "skill_labels", None) or {}
+    skills = [
+        labels.get(key) or key.replace("_", " ")
+        for key in (getattr(course_or_ctx, "focus_skills", None) or [])
+    ]
+    objective = (getattr(course_or_ctx, "objective", None) or getattr(course_or_ctx, "grading_notes", None) or "").strip()
+    text = f"{course_or_ctx.name}: {objective}".strip(" :")
+    if skills:
+        text = f"{text}. Skills that matter: {', '.join(skills)}"
+    return text
+
+
+def _staff_kind_for(name: str, course_id: str | None = None, email: str | None = None) -> str | None:
     key = _name_key(name)
+    if email:
+        linked = _find_account(email=email, name="")
+        if linked:
+            key = _name_key(linked.name)
     if course_id:
         kind = _staff.get(course_id, {}).get(key)
         return kind or None
@@ -332,7 +580,7 @@ def _store_profile(profile: StructuredProfile, course_id: str | None = None) -> 
     global _seq
     key = _name_key(profile.name)
     existing = _people.get(key)
-    pid = existing.id if existing else None
+    pid = existing.id if existing and not _is_placeholder(existing) else None
     if not pid or pid == "you":
         _seq += 1
         pid = f"stu-{_seq}"
@@ -359,23 +607,38 @@ def _roster_seed(course_id: str) -> int:
     return sum(ord(c) for c in course_id) * 17 + 7
 
 
-def _build_roster(course: Course, fill: int = _ROSTER_FILL) -> list[StructuredProfile]:
-    keys = sorted(_enroll.get(course.id, set()))
-    students = [_people[k] for k in keys if k in _people]
-    taken = {p.name for p in students}
-    extra_n = max(0, fill - len(students))
-    extras = (
-        generate_cohort(
-            exclude_name=students[0].name if students else "",
-            count=extra_n,
-            seed=_roster_seed(course.id),
-            exclude_names=taken,
-        )
-        if extra_n
-        else []
-    )
-    extras = [p for p in extras if p.name.lower() not in {n.lower() for n in taken}]
-    return [*students, *extras]
+def _collect_roster(course: Course) -> list[StructuredProfile]:
+    staffed = set(_staff.get(course.id, {}))
+    keys = sorted(key for key in _enroll.get(course.id, set()) if key not in staffed)
+    seen_ids: set[str] = set()
+    roster: list[StructuredProfile] = []
+    for key in keys:
+        person = _people.get(key)
+        if person is None or _is_placeholder(person):
+            pending = _pending_profile(key)
+            if pending.id not in seen_ids:
+                seen_ids.add(pending.id)
+                roster.append(pending)
+            continue
+        pid = person.id.strip() if person.id else ""
+        if not pid or pid in seen_ids:
+            pid = f"stu-{key}"
+            person = person.model_copy(update={"id": pid})
+            _people[key] = person
+        seen_ids.add(pid)
+        roster.append(person)
+    return roster
+
+
+def _build_roster(course: Course, fill: int = _COURSE_COHORT) -> list[StructuredProfile]:
+    roster = _collect_roster(course)
+    if fill and len(roster) < fill:
+        _fill_course_students(course, fill)
+        course.cohort_seeded = True
+        _courses[course.id] = course
+        roster = _collect_roster(course)
+        _save()
+    return roster
 
 
 def _concerns_for(course_id: str) -> dict[str, ConcernRecord]:
@@ -405,8 +668,29 @@ def _can_rematch(course_id: str, name: str) -> bool:
     return bool(_rematch_ok.get(key) or (rec and rec.allow_rematch))
 
 
-def _to_match(course: Course, roster_n: int, your_team: list[StructuredProfile], you_name: str) -> MatchResponse:
-    facts = team_facts(your_team)
+def _to_match(
+    course: Course,
+    roster_n: int,
+    your_team: list[StructuredProfile],
+    you_name: str,
+    *,
+    team_index: int = 0,
+    waiting: bool = False,
+    rationale: str | None = None,
+    official: TeamResult | None = None,
+) -> MatchResponse:
+    facts = (
+        team_facts(your_team, course.focus_skills, course.skill_labels)
+        if your_team
+        else {
+            "rationale": rationale or "Your instructor hasn't formed teams yet.",
+            "shared_windows": [],
+            "team_goal": "",
+            "coverage": [],
+            "thin": [],
+            "skill_peaks": {},
+        }
+    )
     you = _name_key(you_name)
     team = [
         PublicTeammate(id=m.id, name=m.name, is_you=_name_key(m.name) == you)
@@ -415,21 +699,43 @@ def _to_match(course: Course, roster_n: int, your_team: list[StructuredProfile],
     team.sort(key=lambda m: (not m.is_you, m.name.lower()))
     return MatchResponse(
         team=team,
-        rationale=facts["rationale"],
+        rationale=rationale or (official.rationale if official and official.rationale else facts["rationale"]),
         cohort_size=roster_n,
-        shared_windows=facts["shared_windows"],
-        team_goal=facts["team_goal"],
-        coverage=facts["coverage"],
-        thin=facts["thin"],
+        shared_windows=official.shared_windows if official and official.shared_windows else facts["shared_windows"],
+        team_goal=official.team_goal if official and official.team_goal else facts["team_goal"],
+        coverage=official.coverage if official and official.coverage else facts["coverage"],
+        thin=official.thin if official and official.thin else facts["thin"],
+        skill_peaks=official.skill_peaks if official and official.skill_peaks else facts.get("skill_peaks") or {},
         course_id=course.id,
         course_name=course.name,
+        team_id="" if waiting else (official.team_id if official and official.team_id else f"team-{team_index}"),
+        team_label="" if waiting else f"Team {team_index + 1:02d}",
+        waiting=waiting,
     )
+
+
+def _match_from_assignment(course: Course, name: str) -> MatchResponse | None:
+    raw = _assignment_teams.get(course.id)
+    if not raw:
+        return None
+    opt = _assignments.get(course.id)
+    for index, team in enumerate(raw):
+        if any(_name_key(member.name) == _name_key(name) for member in team):
+            official = opt.teams[index] if opt and index < len(opt.teams) else None
+            return _to_match(course, sum(len(t) for t in raw), team, name, team_index=index, official=official)
+    return None
 
 
 def _assignment_ids(opt: OptimizeResponse | None) -> set[str]:
     if not opt:
         return set()
     return {m.id for t in opt.teams for m in t.members}
+
+
+def _assignment_names(opt: OptimizeResponse | None) -> set[str]:
+    if not opt:
+        return set()
+    return {m.name.strip().lower() for t in opt.teams for m in t.members}
 
 
 def _profile_sig(p: StructuredProfile) -> tuple:
@@ -446,22 +752,30 @@ def _profile_sig(p: StructuredProfile) -> tuple:
 
 
 def _assignment_stale(course_id: str, roster: list[StructuredProfile]) -> bool:
+    """True only when the official grouping is missing people who are ready.
+
+    Preference edits do not invalidate teams — those rescore in place.
+    Pending intake students can sit unassigned until the instructor forms teams.
+    """
     existing = _assignments.get(course_id)
-    if _assignment_ids(existing) != {p.id for p in roster}:
+    if not existing:
         return True
-    by_id = {m.id: m for team in _assignment_teams.get(course_id, []) for m in team}
-    return any(p.id not in by_id or _profile_sig(by_id[p.id]) != _profile_sig(p) for p in roster)
+    assigned = _assignment_names(existing)
+    ready = {p.name.strip().lower() for p in _ready_profiles(roster)}
+    return bool(ready) and not ready.issubset(assigned)
 
 
 def _sync_matches(course: Course, raw_teams: list[list[StructuredProfile]]) -> None:
     roster_n = sum(len(t) for t in raw_teams)
     enrolled = _enroll.get(course.id, set())
-    for team in raw_teams:
+    opt = _assignments.get(course.id)
+    for index, team in enumerate(raw_teams):
+        official = opt.teams[index] if opt and index < len(opt.teams) else None
         for member in team:
             key = _name_key(member.name)
             if key in enrolled or key in _people:
                 _matches[_match_key(course.id, member.name)] = _to_match(
-                    course, roster_n, team, member.name
+                    course, roster_n, team, member.name, team_index=index, official=official
                 )
 
 
@@ -483,9 +797,16 @@ def _build_optimize_response(
     vetoes: set,
     flag_note: str | None = None,
 ) -> OptimizeResponse:
-    teams = [_to_team_result(f"team-{i}", members, vetoes) for i, members in enumerate(raw_teams)]
+    teams = [_to_team_result(f"team-{i}", members, vetoes, course_ctx) for i, members in enumerate(raw_teams)]
     optimized_avg = sum(t.score for t in teams) / len(teams) if teams else 0.0
-    baseline_avg = random_baseline_score(profiles, vetoes, course_ctx.team_size_min, course_ctx.team_size_max)
+    baseline_avg = random_baseline_score(
+        profiles,
+        vetoes,
+        course_ctx.team_size_min,
+        course_ctx.team_size_max,
+        team_count=getattr(course_ctx, "team_count", None),
+        focus_skills=getattr(course_ctx, "focus_skills", None),
+    )
     improvement_pct = ((optimized_avg - baseline_avg) / abs(baseline_avg) * 100) if baseline_avg else 0.0
     return OptimizeResponse(
         teams=teams,
@@ -503,43 +824,111 @@ def health():
 @app.get("/api/courses", response_model=CourseListResponse)
 def list_courses(name: str = "", role: str = "student"):
     who = name.strip()
-    if who and role in ("student", "teacher"):
-        return CourseListResponse(courses=_visible_courses(who, role))
-    return CourseListResponse(courses=[_course_view(c, "student") for c in _courses.values()])
+    if not who:
+        return CourseListResponse(courses=[])
+    desk = role if role in ("student", "teacher") else "student"
+    return CourseListResponse(courses=_visible_courses(who, desk))
+
+
+def _bearer_token(authorization: str | None) -> str:
+    if not authorization:
+        return ""
+    kind, _, value = authorization.partition(" ")
+    if kind.lower() != "bearer":
+        return ""
+    return value.strip()
+
+
+def _login_identity(req: LoginRequest, authorization: str | None) -> tuple[str, str | None, str | None]:
+    token = (req.id_token or "").strip() or _bearer_token(authorization)
+    domain, _audience = auth0_settings()
+    if token:
+        claims = verify_id_token(token)
+        email = str(claims.get("email") or "").strip() or None
+        sub = str(claims.get("sub") or "").strip() or None
+        existing = _find_account(sub=sub, email=email, name="")
+        name = existing.name if existing else name_from_claims(claims)
+        if not name:
+            raise HTTPException(status_code=400, detail="Your Auth0 profile needs a name or email.")
+        return name, email, sub
+    email = (req.email or "").strip()
+    password = req.password or ""
+    if email and password:
+        acc = _find_account(email=email, name="")
+        if acc is None or not acc.password_hash or not _verify_password(password, acc.password_hash):
+            raise HTTPException(status_code=401, detail="Email or password is wrong.")
+        return acc.name, acc.email, acc.auth_sub
+    if domain or config.AUTH0_DOMAIN:
+        raise HTTPException(status_code=401, detail="Sign in with Auth0. Name-only login is disabled.")
+    name = (req.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Enter a name to sign in.")
+    return name, None, None
 
 
 @app.post("/api/auth/login", response_model=LoginResponse)
-def login(req: LoginRequest):
-    name = req.name.strip()
-    if not name:
-        raise HTTPException(status_code=400, detail="Enter a name to sign in.")
-    staff_kind = _staff_kind_for(name) or "none"
+def login(req: LoginRequest, authorization: str | None = Header(default=None)):
+    name, email, sub = _login_identity(req, authorization)
+    known = _find_account(sub=sub, email=email, name=name)
+    who = known.name if known else name
+    staff_kind = _staff_kind_for(who, email=email) or "none"
     if req.requested_role == "teacher":
         if staff_kind == "none":
             raise HTTPException(
                 status_code=403,
-                detail=(
-                    "That name isn't an instructor or TA. Sign in as a student, "
-                    f"or ask an instructor to add you as a TA. Demo instructor: {_DEMO_TEACHER}."
-                ),
+                detail="You're not listed as course staff. Sign in as a student, or ask an instructor to add you as a TA.",
             )
-        acc = _accounts.get(_name_key(name)) or _ensure_account(name, "student")
+        acc = _bind_account(who, known.home_role if known else "student", email=email, auth_sub=sub)
+        _save()
         return LoginResponse(
             name=acc.name,
             role="teacher",
             staff_kind=staff_kind,  # type: ignore[arg-type]
-            can_create_course=_is_instructor(acc.name),
+            can_create_course=staff_kind == "teacher",
             courses=_visible_courses(acc.name, "teacher"),
         )
-    acc = _accounts.get(_name_key(name))
-    if acc is None:
-        acc = _ensure_account(name, "student")
+    acc = _bind_account(who, "student", email=email, auth_sub=sub)
     _save()
     return LoginResponse(
         name=acc.name,
         role="student",
         staff_kind=staff_kind,  # type: ignore[arg-type]
-        can_create_course=False,
+        can_create_course=True,
+        courses=_visible_courses(acc.name, "student"),
+    )
+
+
+@app.post("/api/auth/register", response_model=LoginResponse)
+def register(req: RegisterRequest):
+    """Local email signup. Disabled once Auth0 is configured."""
+    domain, _audience = auth0_settings()
+    if domain or config.AUTH0_DOMAIN:
+        raise HTTPException(status_code=401, detail="Create an account with Auth0.")
+    if req.requested_role == "teacher":
+        raise HTTPException(
+            status_code=403,
+            detail="Staff accounts are added by an instructor. Create a student account instead.",
+        )
+    name = req.name.strip()
+    email = req.email.strip()
+    password = req.password or ""
+    if not name:
+        raise HTTPException(status_code=400, detail="Enter a name.")
+    if "@" not in email or "." not in email.split("@")[-1]:
+        raise HTTPException(status_code=400, detail="Enter a valid email.")
+    if len(password) < 8:
+        raise HTTPException(status_code=400, detail="Password needs at least 8 characters.")
+    if _find_account(email=email, name=""):
+        raise HTTPException(status_code=409, detail="That email already has an account. Sign in instead.")
+    if _find_account(name=name):
+        raise HTTPException(status_code=409, detail="That name is already taken.")
+    acc = _bind_account(name, "student", email=email, password_hash=_hash_password(password))
+    _save()
+    return LoginResponse(
+        name=acc.name,
+        role="student",
+        staff_kind="none",
+        can_create_course=True,
         courses=_visible_courses(acc.name, "student"),
     )
 
@@ -547,27 +936,50 @@ def login(req: LoginRequest):
 @app.post("/api/courses", response_model=CourseView)
 def create_course(req: CreateCourseRequest):
     actor = req.actor.strip()
-    if not actor or not _is_instructor(actor):
-        raise HTTPException(status_code=403, detail="Only instructors can create courses.")
+    if not actor:
+        raise HTTPException(status_code=400, detail="Sign in before creating a course.")
+    acc = _accounts.get(_name_key(actor)) or _ensure_account(actor, "student")
+    if _staff_kind_for(acc.name) == "ta" and not _is_instructor(acc.name):
+        raise HTTPException(
+            status_code=403,
+            detail="TAs only staff the course they were added to. Ask an instructor to add you on another course.",
+        )
     base = _slug(req.name)
     cid = base
     n = 2
     while cid in _courses:
         cid = f"{base}-{n}"
         n += 1
+    notes = (req.objective or req.grading_notes or "").strip()
     course = Course(
         id=cid,
         name=req.name.strip(),
-        grading_notes=req.grading_notes or "",
+        grading_notes=notes,
         team_size_min=req.team_size_min,
         team_size_max=req.team_size_max,
+        team_count=req.team_count,
+        objective=notes,
+        focus_skills=req.focus_skills,
+        skill_labels=req.skill_labels,
     )
     _courses[cid] = course
     _enroll.setdefault(cid, set())
-    _staff.setdefault(cid, {})[_name_key(actor)] = "teacher"
-    _ensure_account(actor, "teacher")
+    staff_bucket = _staff.setdefault(cid, {})
+    staff_creator = _is_instructor(acc.name) or _staff_kind_for(acc.name) == "teacher"
+    if staff_creator:
+        staff_bucket[_name_key(acc.name)] = "teacher"
+        _ensure_account(acc.name, "teacher")
+        access = "teacher"
+        enrolled = False
+    else:
+        for name in _DEMO_INSTRUCTORS:
+            staff_bucket.setdefault(_name_key(name), "teacher")
+        _enroll[cid].add(_name_key(acc.name))
+        access = "student"
+        enrolled = True
+    _seed_course_cohort(course, extra_exclude={acc.name}, create=True)
     _save()
-    return _course_view(course, "teacher")
+    return _course_view(course, access, enrolled=enrolled)
 
 
 @app.post("/api/courses/{course_id}/enroll")
@@ -583,8 +995,9 @@ def enroll_student(course_id: str, req: EnrollRequest):
         )
     acc = _ensure_account(name, "student")
     bucket = _enroll.setdefault(course_id, set())
-    first = _name_key(acc.name) not in bucket
-    bucket.add(_name_key(acc.name))
+    key = _name_key(acc.name)
+    first = key not in bucket
+    bucket.add(key)
     if first:
         _notify(
             course_id=course_id,
@@ -603,17 +1016,20 @@ def enroll_student(course_id: str, req: EnrollRequest):
 def add_staff(course_id: str, req: StaffRequest):
     course = _course_or_404(course_id)
     _require_staff(course_id, req.actor, need_teacher=True)
-    name = req.name.strip()
-    if not name:
-        raise HTTPException(status_code=400, detail="Enter the TA's name.")
-    key = _name_key(name)
+    raw = req.name.strip()
+    if not raw:
+        raise HTTPException(status_code=400, detail="Enter the TA's name or email.")
+    if "@" in raw:
+        acc = _find_account(email=raw, name="") or _bind_account(raw.split("@", 1)[0], "student", email=raw)
+    else:
+        acc = _accounts.get(_name_key(raw)) or _ensure_account(raw, "student")
+    key = _name_key(acc.name)
     if key == _name_key(req.actor):
         raise HTTPException(status_code=400, detail="You already staff this course.")
     existing = _staff.get(course_id, {}).get(key)
     if existing == "teacher":
         raise HTTPException(status_code=400, detail="That person already teaches this course.")
-    acc = _accounts.get(key) or _ensure_account(name, "student")
-    if acc.home_role == "teacher":
+    if acc.home_role == "teacher" or _staff_kind_for(acc.name) == "teacher":
         raise HTTPException(status_code=400, detail="Instructors are added as teachers, not TAs.")
     _staff.setdefault(course_id, {})[key] = "ta"
     _enroll.setdefault(course_id, set()).discard(key)
@@ -643,7 +1059,13 @@ def add_staff(course_id: str, req: StaffRequest):
 @app.get("/api/profile", response_model=ProfileLookupResponse)
 def lookup_profile(name: str, course_id: str | None = None):
     stored = _people.get(_name_key(name))
-    match = _matches.get(_match_key(course_id, name)) if course_id else None
+    if _is_placeholder(stored):
+        stored = None
+    match = None
+    if course_id and course_id in _courses:
+        match = _match_from_assignment(_courses[course_id], name) or _matches.get(_match_key(course_id, name))
+        if match and match.waiting:
+            match = None
     rec = _concerns.get(_match_key(course_id, name)) if course_id else None
     return ProfileLookupResponse(
         profile=stored,
@@ -682,7 +1104,7 @@ def _apply_pref_to_team(course: Course, stored: StructuredProfile) -> PrefImpact
     hurts = _score_hurts(before, after) or after_stats["violations"] > before_v
     if opt is not None:
         team_id = opt.teams[team_idx].team_id if team_idx < len(opt.teams) else f"team-{team_idx}"
-        updated = _to_team_result(team_id, team, set())
+        updated = _to_team_result(team_id, team, set(), course)
         teams = list(opt.teams)
         if team_idx < len(teams):
             teams[team_idx] = updated
@@ -793,7 +1215,7 @@ def submit(profile: StructuredProfile, course_id: str | None = Query(None)):
 @app.get("/api/roster", response_model=RosterResponse)
 def roster(
     course_id: str = Query("hackcmu"),
-    fill: int = Query(16, ge=0, le=40),
+    fill: int = Query(20, ge=0, le=40),
     seed: int | None = Query(None),
     actor: str | None = Query(None),
 ):
@@ -812,6 +1234,7 @@ def roster(
                 count=extra_n,
                 seed=seed,
                 exclude_names=taken,
+                focus_skills=course.focus_skills,
             )
             if extra_n
             else []
@@ -820,12 +1243,13 @@ def roster(
         profiles = [*students, *extras]
     else:
         profiles = _build_roster(course, fill)
+    assignment = _assignments.get(course_id)
     return RosterResponse(
         profiles=profiles,
         concerns=_concerns_for(course_id),
         rematch_allowed=_rematch_map(course_id),
         course=course,
-        assignment=_assignments.get(course_id),
+        assignment=assignment,
     )
 
 
@@ -842,7 +1266,7 @@ def cohort(
 def chat(req: ChatRequest):
     """Student personality interview with Grok, one turn at a time."""
     name = req.name.strip() or "there"
-    course_context = f"{req.course.name}: {req.course.grading_notes}".strip(" :")
+    course_context = _course_prompt(req.course)
     messages = [{"role": m.role, "content": m.content} for m in req.messages]
     if req.mode == "update" and req.profile is not None:
         raw = update_turn(name, messages, course_context, req.profile.model_dump(), req.focus)
@@ -881,7 +1305,7 @@ def chat(req: ChatRequest):
 def voice_session(req: VoiceSessionRequest):
     """Mint a short-lived Grok Voice token for the browser. The xAI key stays on the server."""
     name = req.name.strip() or "there"
-    course_context = f"{req.course.name}: {req.course.grading_notes}".strip(" :")
+    course_context = _course_prompt(req.course)
     review = req.profile.model_dump() if req.profile else None
     try:
         return VoiceSessionResponse(**create_voice_session(name, course_context, review))
@@ -934,30 +1358,36 @@ def speak(req: SpeakRequest):
 
 @app.post("/api/match", response_model=MatchResponse)
 def match(req: MatchRequest):
-    """Place the student on the course's official assignment (same teams the teacher sees)."""
+    """Place the student on the course assignment — same teams the teacher sees."""
     course = _courses.get(req.course_id) if req.course_id else None
     if course is None:
         course = Course(
             id=req.course_id or "hackcmu",
             name=req.course.name,
-            grading_notes=req.course.grading_notes or "",
+            grading_notes=req.course.objective or req.course.grading_notes or "",
             team_size_min=req.course.team_size_min,
             team_size_max=req.course.team_size_max,
+            team_count=req.course.team_count,
+            objective=req.course.objective or req.course.grading_notes or "",
+            focus_skills=req.course.focus_skills,
+            skill_labels=req.course.skill_labels,
         )
         _courses.setdefault(course.id, course)
         _enroll.setdefault(course.id, set())
 
     key = _match_key(course.id, req.profile.name)
-    existing = _matches.get(key)
+    existing = _match_from_assignment(course, req.profile.name) or _matches.get(key)
     allowed = _can_rematch(course.id, req.profile.name)
-    if existing is not None and not allowed:
+    if existing is not None and not existing.waiting and not allowed:
         return existing
 
     stored = _store_profile(req.profile, course.id)
-    roster = _build_roster(course, fill=req.cohort_size)
+    roster = _ready_profiles(_build_roster(course, fill=req.cohort_size or _COURSE_COHORT))
+    if stored not in roster and not any(_name_key(p.name) == _name_key(stored.name) for p in roster):
+        roster = [stored, *roster]
     assigned = _assignment_teams.get(course.id)
 
-    if existing is not None and allowed and assigned:
+    if existing is not None and not existing.waiting and allowed and assigned:
         raw_teams = copy.deepcopy(assigned)
         found = False
         for team in raw_teams:
@@ -966,7 +1396,7 @@ def match(req: MatchRequest):
                     team[i] = stored
                     found = True
         if found:
-            current_team = next(t for t in raw_teams if any(m.id == stored.id for m in t))
+            current_team = next(t for t in raw_teams if any(_name_key(m.name) == _name_key(stored.name) for m in t))
             vetoes = {
                 tuple(sorted((stored.id, m.id)))
                 for m in current_team
@@ -983,16 +1413,16 @@ def match(req: MatchRequest):
             _persist_assignment(course, raw_teams, opt)
         elif _assignment_stale(course.id, roster):
             try:
-                raw_teams = solve_teams(roster, course.team_size_min, course.team_size_max, set())
+                raw_teams = _solve_roster(roster, course, set())
             except RuntimeError as e:
                 raise HTTPException(status_code=400, detail=str(e))
             opt = _build_optimize_response(raw_teams, roster, course, set())
             _persist_assignment(course, raw_teams, opt)
         else:
             raw_teams = assigned
-    elif existing is None or _assignment_stale(course.id, roster):
+    elif existing is None or existing.waiting or _assignment_stale(course.id, roster):
         try:
-            raw_teams = solve_teams(roster, course.team_size_min, course.team_size_max, set())
+            raw_teams = _solve_roster(roster, course, set())
         except RuntimeError as e:
             raise HTTPException(status_code=400, detail=str(e))
         opt = _build_optimize_response(raw_teams, roster, course, set())
@@ -1007,7 +1437,9 @@ def match(req: MatchRequest):
     if your_team is None:
         raise HTTPException(status_code=500, detail="Solver finished but you were not assigned to a team.")
 
-    result = _to_match(course, len(roster), your_team, stored.name)
+    result = _match_from_assignment(course, stored.name) or _to_match(
+        course, len(roster), your_team, stored.name
+    )
     _matches[_match_key(course.id, stored.name)] = result
     _rematch_ok.pop(key, None)
     rec = _concerns.get(key)
@@ -1019,7 +1451,7 @@ def match(req: MatchRequest):
         to_name="",
         to_role="teacher",
         kind="team",
-        title=f"{stored.name} {'re-matched' if existing is not None else 'found a team'}",
+        title=f"{stored.name} {'re-matched' if existing is not None and not existing.waiting else 'found a team'}",
         body=f"{stored.name} is on a team of {len(your_team)}: {names}.",
         student=stored.name,
     )
@@ -1136,7 +1568,7 @@ def set_rematch_permission(req: RematchPermissionRequest):
 
 @app.post("/api/parse", response_model=ParseResponse)
 def parse(req: ParseRequest):
-    course_context = f"{req.course.name}: {req.course.grading_notes}".strip(" :")
+    course_context = _course_prompt(req.course)
     profiles = []
     for idx, person in enumerate(req.people):
         raw = extract_profile(person.name, person.bio, course_context)
@@ -1153,7 +1585,7 @@ def parse(req: ParseRequest):
 
 @app.post("/api/clarify", response_model=ParseResponse)
 def clarify(req: ClarifyRequest):
-    course_context = f"{req.course.name}: {req.course.grading_notes}".strip(" :")
+    course_context = _course_prompt(req.course)
     answers_by_profile: dict[str, list[tuple[str, str]]] = {}
     for a in req.answers:
         answers_by_profile.setdefault(a.profile_id, []).append((a.question, a.answer))
@@ -1176,33 +1608,71 @@ def clarify(req: ClarifyRequest):
     return ParseResponse(profiles=updated)
 
 
-def _to_team_result(team_id: str, members: list[StructuredProfile], vetoes: set) -> TeamResult:
-    stats = team_stats(members, vetoes)
-    facts = team_facts(members)
+def _to_team_result(team_id: str, members: list[StructuredProfile], vetoes: set, course_ctx=None) -> TeamResult:
+    focus = getattr(course_ctx, "focus_skills", None) if course_ctx else None
+    labels = getattr(course_ctx, "skill_labels", None) if course_ctx else None
+    stats = team_stats(members, vetoes, focus)
+    facts = team_facts(members, focus, labels)
+    rationale = generate_rationale(
+        [m.name for m in members],
+        stats["breakdown"],
+        facts["team_goal"],
+        extras={
+            "coverage": facts["coverage"],
+            "thin": facts["thin"],
+            "shared_windows": facts["shared_windows"],
+            "skill_peaks": facts.get("skill_peaks") or {},
+            "skill_labels": labels or None,
+        },
+    )
     return TeamResult(
         team_id=team_id,
-        members=[TeamMember(id=m.id, name=m.name, goal=m.goal, hours=m.hours) for m in members],
+        members=[
+            TeamMember(
+                id=m.id,
+                name=m.name,
+                goal=m.goal,
+                hours=m.hours,
+                role=m.role,
+                skills=m.skills,
+            )
+            for m in members
+        ],
         score=stats["avg"],
         breakdown=stats["breakdown"],
         violations=stats["violations"],
-        rationale=facts["rationale"],
+        rationale=rationale or facts["rationale"],
         shared_windows=facts["shared_windows"],
         team_goal=facts["team_goal"],
         coverage=facts["coverage"],
         thin=facts["thin"],
+        skill_peaks=facts.get("skill_peaks") or {},
     )
 
 
 @app.post("/api/optimize", response_model=OptimizeResponse)
 def optimize(req: OptimizeRequest):
     vetoes = {tuple(sorted(pair)) for pair in req.vetoes}
+    stored = _courses.get(req.course_id) if req.course_id else None
+    ctx = stored.context() if stored is not None else req.course
+    profiles = _ready_profiles(req.profiles)
+    if stored is not None:
+        for person in profiles:
+            _store_profile(person, stored.id)
+        live = _ready_profiles(_collect_roster(stored))
+        by_name = {_name_key(p.name): p for p in live}
+        for person in profiles:
+            by_name[_name_key(person.name)] = person
+        profiles = list(by_name.values())
+    if len(profiles) < ctx.team_size_min:
+        raise HTTPException(status_code=400, detail="Need more completed student profiles before forming teams.")
     try:
-        raw_teams = solve_teams(req.profiles, req.course.team_size_min, req.course.team_size_max, vetoes)
+        raw_teams = _solve_roster(profiles, ctx, vetoes)
     except RuntimeError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    opt = _build_optimize_response(raw_teams, req.profiles, req.course, vetoes)
-    course = _courses.get(req.course_id) if req.course_id else None
+    opt = _build_optimize_response(raw_teams, profiles, ctx, vetoes)
+    course = stored
     if course is not None:
         _persist_assignment(course, raw_teams, opt)
         _notify(
@@ -1220,6 +1690,8 @@ def optimize(req: OptimizeRequest):
 @app.post("/api/flag", response_model=OptimizeResponse)
 def flag(req: FlagRequest):
     vetoes = {tuple(sorted(pair)) for pair in req.vetoes}
+    stored = _courses.get(req.course_id) if req.course_id else None
+    ctx = stored.context() if stored is not None else req.course
     profiles_by_id = {p.id: p for p in req.profiles}
 
     teams_as_people: list[list[StructuredProfile]] = [
@@ -1230,15 +1702,15 @@ def flag(req: FlagRequest):
         teams_as_people,
         req.person_id,
         vetoes,
-        req.course.team_size_min,
-        req.course.team_size_max,
+        ctx.team_size_min,
+        ctx.team_size_max,
     )
 
     team_ids = [t.team_id for t in req.teams]
     while len(team_ids) < len(teams_as_people):
         team_ids.append(f"team-{len(team_ids)}")
 
-    opt = _build_optimize_response(teams_as_people, req.profiles, req.course, vetoes, flag_note)
+    opt = _build_optimize_response(teams_as_people, req.profiles, ctx, vetoes, flag_note)
     # Keep teacher-assigned team_ids when the count is unchanged.
     if len(opt.teams) == len(team_ids):
         opt.teams = [

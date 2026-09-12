@@ -1,5 +1,5 @@
 from typing import Literal, Optional
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from .slots import normalize_availability
 
@@ -7,27 +7,79 @@ GoalType = Literal["pass", "grade_A", "research", "deep_mastery"]
 Role = Literal["lead", "contributor", "either"]
 ConflictMode = Literal["vote", "rotate_lead", "escalate", "defer_to_invested"]
 
+SKILL_KEYS = ("technical", "writing", "analysis", "presentation")
+DEFAULT_SKILL_LABELS = {
+    "technical": "Technical",
+    "writing": "Writing",
+    "analysis": "Analysis",
+    "presentation": "Presentation",
+}
+
+
+def normalize_focus_skills(values: list[str] | None) -> list[str]:
+    keys = [key for key in (values or []) if key in SKILL_KEYS]
+    return keys or list(SKILL_KEYS)
+
 
 class CourseContext(BaseModel):
     name: str
     grading_notes: Optional[str] = ""
-    team_size_min: int = 3
-    team_size_max: int = 4
+    team_size_min: int = Field(3, ge=2, le=8)
+    team_size_max: int = Field(4, ge=2, le=8)
+    team_count: Optional[int] = Field(None, ge=1, le=40)
+    objective: Optional[str] = ""
+    focus_skills: list[str] = Field(default_factory=lambda: list(SKILL_KEYS))
+    skill_labels: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("focus_skills", mode="before")
+    @classmethod
+    def _focus(cls, value):
+        if isinstance(value, str):
+            return normalize_focus_skills([part.strip() for part in value.split(",")])
+        return normalize_focus_skills(list(value or []))
+
+    @model_validator(mode="after")
+    def _sizes(self):
+        if self.team_size_min > self.team_size_max:
+            raise ValueError("Minimum team size cannot be larger than the maximum.")
+        return self
 
 
 class Course(BaseModel):
     id: str
     name: str
     grading_notes: Optional[str] = ""
-    team_size_min: int = 3
-    team_size_max: int = 4
+    team_size_min: int = Field(3, ge=2, le=8)
+    team_size_max: int = Field(4, ge=2, le=8)
+    team_count: Optional[int] = Field(None, ge=1, le=40)
+    objective: Optional[str] = ""
+    focus_skills: list[str] = Field(default_factory=lambda: list(SKILL_KEYS))
+    skill_labels: dict[str, str] = Field(default_factory=dict)
+    cohort_seeded: bool = False
+
+    @field_validator("focus_skills", mode="before")
+    @classmethod
+    def _focus(cls, value):
+        if isinstance(value, str):
+            return normalize_focus_skills([part.strip() for part in value.split(",")])
+        return normalize_focus_skills(list(value or []))
+
+    @model_validator(mode="after")
+    def _sizes(self):
+        if self.team_size_min > self.team_size_max:
+            raise ValueError("Minimum team size cannot be larger than the maximum.")
+        return self
 
     def context(self) -> CourseContext:
         return CourseContext(
             name=self.name,
-            grading_notes=self.grading_notes or "",
+            grading_notes=self.objective or self.grading_notes or "",
             team_size_min=self.team_size_min,
             team_size_max=self.team_size_max,
+            team_count=self.team_count,
+            objective=self.objective or self.grading_notes or "",
+            focus_skills=self.focus_skills,
+            skill_labels=self.skill_labels,
         )
 
 
@@ -40,6 +92,9 @@ class Account(BaseModel):
     name: str
     home_role: Literal["student", "teacher"]
     created_at: str = ""
+    email: Optional[str] = None
+    auth_sub: Optional[str] = None
+    password_hash: Optional[str] = None
 
 
 class PersonInput(BaseModel):
@@ -109,6 +164,8 @@ class TeamMember(BaseModel):
     name: str
     goal: GoalType
     hours: int
+    role: Role = "either"
+    skills: Skills = Field(default_factory=Skills)
 
 
 class TeamResult(BaseModel):
@@ -122,6 +179,7 @@ class TeamResult(BaseModel):
     team_goal: str = ""
     coverage: list[str] = []
     thin: list[str] = []
+    skill_peaks: dict[str, int] = Field(default_factory=dict)
 
 
 class OptimizeResponse(BaseModel):
@@ -151,7 +209,7 @@ class ChatRequest(BaseModel):
     messages: list[ChatMessage]
     course: CourseContext = Field(
         default_factory=lambda: CourseContext(
-            name="HackCMU Team Formation",
+            name="Team Formation",
             grading_notes="Collaborative project; teams of 3–4.",
             team_size_min=3,
             team_size_max=4,
@@ -225,7 +283,7 @@ class MatchRequest(BaseModel):
     profile: StructuredProfile
     course: CourseContext = Field(
         default_factory=lambda: CourseContext(
-            name="HackCMU Team Formation",
+            name="Team Formation",
             grading_notes="Collaborative project; teams of 3–4.",
             team_size_min=3,
             team_size_max=4,
@@ -245,14 +303,35 @@ class MatchResponse(BaseModel):
     thin: list[str] = []
     course_id: str = ""
     course_name: str = ""
+    team_id: str = ""
+    team_label: str = ""
+    waiting: bool = False
+    skill_peaks: dict[str, int] = Field(default_factory=dict)
 
 
 class CreateCourseRequest(BaseModel):
     name: str
     grading_notes: Optional[str] = ""
-    team_size_min: int = 3
-    team_size_max: int = 4
+    team_size_min: int = Field(3, ge=2, le=8)
+    team_size_max: int = Field(4, ge=2, le=8)
+    team_count: Optional[int] = Field(None, ge=1, le=40)
+    objective: Optional[str] = ""
+    focus_skills: list[str] = Field(default_factory=lambda: list(SKILL_KEYS))
+    skill_labels: dict[str, str] = Field(default_factory=dict)
     actor: str = ""
+
+    @field_validator("focus_skills", mode="before")
+    @classmethod
+    def _focus(cls, value):
+        if isinstance(value, str):
+            return normalize_focus_skills([part.strip() for part in value.split(",")])
+        return normalize_focus_skills(list(value or []))
+
+    @model_validator(mode="after")
+    def _sizes(self):
+        if self.team_size_min > self.team_size_max:
+            raise ValueError("Minimum team size cannot be larger than the maximum.")
+        return self
 
 
 class CourseListResponse(BaseModel):
@@ -260,8 +339,18 @@ class CourseListResponse(BaseModel):
 
 
 class LoginRequest(BaseModel):
-    name: str
+    name: Optional[str] = None
+    id_token: Optional[str] = None
+    email: Optional[str] = None
+    password: Optional[str] = None
     requested_role: Literal["student", "teacher"]
+
+
+class RegisterRequest(BaseModel):
+    name: str
+    email: str
+    password: str
+    requested_role: Literal["student", "teacher"] = "student"
 
 
 class LoginResponse(BaseModel):

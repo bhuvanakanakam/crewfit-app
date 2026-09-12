@@ -19,14 +19,35 @@ import type {
 
 const BASE = import.meta.env.VITE_API_BASE ?? "";
 
+function apiErrorMessage(payload: unknown, fallback: string): string {
+  if (!payload || typeof payload !== "object") return fallback;
+  const detail = (payload as { detail?: unknown }).detail;
+  if (typeof detail === "string" && detail.trim()) return detail;
+  if (Array.isArray(detail)) {
+    const parts = detail
+      .map((item) => {
+        if (typeof item === "string") return item;
+        if (item && typeof item === "object" && "msg" in item) return String((item as { msg: unknown }).msg);
+        return "";
+      })
+      .filter(Boolean);
+    if (parts.length) return parts.join(" ");
+  }
+  if (detail && typeof detail === "object" && "msg" in detail) {
+    return String((detail as { msg: unknown }).msg);
+  }
+  return fallback;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const { headers: extraHeaders, ...rest } = init ?? {};
   const res = await fetch(`${BASE}/api${path}`, {
-    headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
-    ...init,
+    ...rest,
+    headers: { "Content-Type": "application/json", ...(extraHeaders ?? {}) },
   });
   if (!res.ok) {
-    const detail = await res.json().catch(() => ({}));
-    throw new Error(detail.detail ?? `Request to ${path} failed (${res.status})`);
+    const payload = await res.json().catch(() => ({}));
+    throw new Error(apiErrorMessage(payload, `Request to ${path} failed (${res.status})`));
   }
   return res.json();
 }
@@ -43,8 +64,43 @@ export function listCourses(name?: string, role?: "student" | "teacher") {
   return request<{ courses: Course[] }>(`/courses${suffix}`);
 }
 
-export function loginAccount(name: string, role: "student" | "teacher") {
-  return post<LoginResponse>("/auth/login", { name, requested_role: role });
+export function registerAccount(opts: {
+  name: string;
+  email: string;
+  password: string;
+  requested_role: "student" | "teacher";
+}) {
+  return post<LoginResponse>("/auth/register", {
+    name: opts.name.trim(),
+    email: opts.email.trim(),
+    password: opts.password,
+    requested_role: opts.requested_role,
+  });
+}
+
+export function loginAccount(opts: {
+  requested_role: "student" | "teacher";
+  id_token?: string;
+  name?: string;
+  email?: string;
+  password?: string;
+}) {
+  const token = typeof opts.id_token === "string" ? opts.id_token.trim() : "";
+  const headers: Record<string, string> = {};
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+  return request<LoginResponse>("/auth/login", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      requested_role: opts.requested_role,
+      ...(token ? { id_token: token } : {}),
+      ...(opts.name?.trim() ? { name: opts.name.trim() } : {}),
+      ...(opts.email?.trim() ? { email: opts.email.trim() } : {}),
+      ...(opts.password ? { password: opts.password } : {}),
+    }),
+  });
 }
 
 export function enrollInCourse(courseId: string, name: string) {
@@ -62,8 +118,12 @@ export function addCourseStaff(courseId: string, actor: string, name: string) {
 export function createCourse(body: {
   name: string;
   grading_notes?: string;
+  objective?: string;
   team_size_min?: number;
   team_size_max?: number;
+  team_count?: number | null;
+  focus_skills?: string[];
+  skill_labels?: Record<string, string>;
   actor: string;
 }) {
   return post<Course>("/courses", body);
@@ -131,7 +191,7 @@ export function findMatch(
   profile: StructuredProfile,
   course: CourseContext,
   courseId: string,
-  cohortSize = 16,
+  cohortSize = 20,
 ) {
   return post<MatchResponse>("/match", { profile, course, course_id: courseId, cohort_size: cohortSize });
 }
@@ -141,7 +201,7 @@ export function submitProfile(profile: StructuredProfile, courseId?: string) {
   return post<SubmitResponse>(`/submit${q}`, profile);
 }
 
-export function loadRoster(courseId: string, fill = 16, actor?: string) {
+export function loadRoster(courseId: string, fill = 20, actor?: string) {
   const q = new URLSearchParams({ course_id: courseId, fill: String(fill) });
   if (actor) q.set("actor", actor);
   return request<RosterResponse>(`/roster?${q}`);

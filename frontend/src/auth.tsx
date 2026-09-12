@@ -12,6 +12,7 @@ export interface CrewAuth {
   error: Error | undefined;
   login: (role: Role, mode?: "login" | "signup") => Promise<void>;
   logout: () => void;
+  getIdToken: () => Promise<string | undefined>;
 }
 
 const CrewAuthContext = createContext<CrewAuth | null>(null);
@@ -26,6 +27,7 @@ const unconfigured: CrewAuth = {
     throw new Error("Auth0 is not configured.");
   },
   logout: () => undefined,
+  getIdToken: async () => undefined,
 };
 
 function clearCallbackParams() {
@@ -38,7 +40,7 @@ function clearCallbackParams() {
 }
 
 function Auth0Bridge({ children }: { children: ReactNode }) {
-  const { isLoading, isAuthenticated, user, error, loginWithRedirect, logout } = useAuth0();
+  const { isLoading, isAuthenticated, user, error, loginWithRedirect, logout, getIdTokenClaims } = useAuth0();
 
   useEffect(() => {
     if (error) clearCallbackParams();
@@ -61,8 +63,16 @@ function Auth0Bridge({ children }: { children: ReactNode }) {
       logout: () => {
         logout({ logoutParams: { returnTo: window.location.origin } });
       },
+      getIdToken: async () => {
+        for (let i = 0; i < 6; i += 1) {
+          const claims = await getIdTokenClaims();
+          if (claims?.__raw) return claims.__raw;
+          await new Promise((resolve) => window.setTimeout(resolve, 150));
+        }
+        return undefined;
+      },
     }),
-    [error, isAuthenticated, isLoading, loginWithRedirect, logout, user],
+    [error, getIdTokenClaims, isAuthenticated, isLoading, loginWithRedirect, logout, user],
   );
 
   return <CrewAuthContext.Provider value={value}>{children}</CrewAuthContext.Provider>;
@@ -85,7 +95,10 @@ export function CrewAuthProvider({ children }: { children: ReactNode }) {
     <Auth0Provider
       domain={AUTH0_DOMAIN}
       clientId={AUTH0_CLIENT_ID}
-      authorizationParams={{ redirect_uri: window.location.origin }}
+      authorizationParams={{
+        redirect_uri: window.location.origin,
+        scope: "openid profile email",
+      }}
       cacheLocation="localstorage"
       onRedirectCallback={onRedirectCallback}
     >
