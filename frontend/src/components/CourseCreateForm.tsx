@@ -1,14 +1,24 @@
+import { useEffect, useState } from "react";
 import { ALL_SKILL_KEYS, SKILL_FIELDS } from "../types";
 import { teamPlanHint } from "../lib/teams";
 import SkillToggle from "./SkillToggle";
 import { Button } from "./ui/button";
+
+const TEAM_SIZE_MIN = 2;
+const TEAM_SIZE_MAX = 8;
+
+export function clampTeamSize(raw: string, fallback = 4) {
+  if (!raw.trim()) return fallback;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(TEAM_SIZE_MIN, Math.min(TEAM_SIZE_MAX, Math.round(n)));
+}
 
 export interface CourseDraft {
   name: string;
   objective: string;
   teamSize: number;
   flex: boolean;
-  teamCount: string;
   focusSkills: string[];
 }
 
@@ -17,7 +27,6 @@ export const EMPTY_COURSE_DRAFT: CourseDraft = {
   objective: "",
   teamSize: 4,
   flex: true,
-  teamCount: "",
   focusSkills: [...ALL_SKILL_KEYS],
 };
 
@@ -40,11 +49,21 @@ export default function CourseCreateForm({
   onCancel,
   rosterHint = 20,
 }: Props) {
-  const minSize = draft.flex ? Math.max(2, draft.teamSize - 1) : draft.teamSize;
+  const [teamSizeText, setTeamSizeText] = useState(String(draft.teamSize));
+  const minSize = draft.flex ? Math.max(TEAM_SIZE_MIN, draft.teamSize - 1) : draft.teamSize;
   const maxSize = draft.teamSize;
-  const forced = draft.teamCount.trim() ? Number(draft.teamCount) : null;
-  const hint = teamPlanHint(rosterHint, minSize, maxSize, Number.isFinite(forced) ? forced : null);
+  const hint = teamPlanHint(rosterHint, minSize, maxSize);
   const canSubmit = Boolean(draft.name.trim()) && draft.focusSkills.length > 0 && !busy;
+
+  useEffect(() => {
+    setTeamSizeText(String(draft.teamSize));
+  }, [draft.teamSize]);
+
+  function commitTeamSize(raw: string) {
+    const next = clampTeamSize(raw, draft.teamSize);
+    setTeamSizeText(String(next));
+    if (next !== draft.teamSize) onChange({ ...draft, teamSize: next });
+  }
 
   function toggleSkill(key: string) {
     const next = draft.focusSkills.includes(key)
@@ -83,31 +102,27 @@ export default function CourseCreateForm({
         placeholder="What should a good team be able to do together?"
       />
 
-      <div className="mt-5 grid gap-4 sm:grid-cols-2">
-        <label className="block">
-          <span className="text-sm font-semibold">People per team</span>
-          <input
-            type="number"
-            min={2}
-            max={8}
-            value={draft.teamSize}
-            onChange={(e) => onChange({ ...draft, teamSize: Math.max(2, Math.min(8, Number(e.target.value) || 2)) })}
-            className="mt-2 h-11 w-full rounded-xl bg-background px-3"
-          />
-        </label>
-        <label className="block">
-          <span className="text-sm font-semibold">Number of teams</span>
-          <input
-            type="number"
-            min={1}
-            max={20}
-            value={draft.teamCount}
-            onChange={(e) => onChange({ ...draft, teamCount: e.target.value })}
-            className="mt-2 h-11 w-full rounded-xl bg-background px-3"
-            placeholder="Auto from roster"
-          />
-        </label>
-      </div>
+      <label className="mt-5 block" htmlFor="course-team-size">
+        <span className="text-sm font-semibold">People per team</span>
+        <input
+          id="course-team-size"
+          type="text"
+          inputMode="numeric"
+          pattern="[0-9]*"
+          value={teamSizeText}
+          onChange={(e) => {
+            const raw = e.target.value.replace(/[^\d]/g, "");
+            setTeamSizeText(raw);
+            if (raw === "") return;
+            const n = Number(raw);
+            if (n >= TEAM_SIZE_MIN && n <= TEAM_SIZE_MAX) {
+              onChange({ ...draft, teamSize: n });
+            }
+          }}
+          onBlur={() => commitTeamSize(teamSizeText)}
+          className="mt-2 h-11 w-full rounded-xl bg-background px-3"
+        />
+      </label>
       <label className="mt-3 flex items-center gap-2 text-sm">
         <input
           type="checkbox"
@@ -145,16 +160,14 @@ export default function CourseCreateForm({
 }
 
 export function draftToCreateBody(draft: CourseDraft) {
-  const teamSize = draft.teamSize;
-  const minSize = draft.flex ? Math.max(2, teamSize - 1) : teamSize;
-  const count = draft.teamCount.trim() ? Number(draft.teamCount) : undefined;
+  const teamSize = clampTeamSize(String(draft.teamSize));
+  const minSize = draft.flex ? Math.max(TEAM_SIZE_MIN, teamSize - 1) : teamSize;
   return {
     name: draft.name.trim(),
     objective: draft.objective.trim(),
     grading_notes: draft.objective.trim(),
     team_size_min: minSize,
     team_size_max: teamSize,
-    ...(Number.isFinite(count) && count ? { team_count: count } : {}),
     focus_skills: draft.focusSkills,
   };
 }

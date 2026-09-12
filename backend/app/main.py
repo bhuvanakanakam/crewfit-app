@@ -10,7 +10,7 @@ from fastapi import FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 from . import config
-from .analysis import random_baseline_score, reoptimize_for_flag, team_stats
+from .analysis import move_person_to_team, random_baseline_score, reoptimize_for_flag, team_stats
 from .auth0 import auth0_settings, name_from_claims, verify_id_token
 from .config import CORS_ORIGINS
 from .db import load_snapshot, save_snapshot
@@ -34,6 +34,7 @@ from .models import (
     MarkReadRequest,
     MatchRequest,
     MatchResponse,
+    MoveRequest,
     NotificationListResponse,
     NotificationRecord,
     OptimizeRequest,
@@ -457,7 +458,7 @@ def _solve_roster(profiles, course_or_ctx, vetoes, time_limit_s: float = 10.0):
         course_or_ctx.team_size_max,
         vetoes,
         time_limit_s=time_limit_s,
-        team_count=getattr(course_or_ctx, "team_count", None),
+        team_count=None,
         focus_skills=getattr(course_or_ctx, "focus_skills", None),
     )
 
@@ -774,24 +775,67 @@ def _persist_assignment(
     _save()
 
 
+def _hydrate_teams(
+    teams: list[TeamResult],
+    profiles: list[StructuredProfile],
+) -> list[list[StructuredProfile]]:
+    by_id = {p.id: p for p in profiles}
+    by_name = {_name_key(p.name): p for p in profiles}
+    hydrated: list[list[StructuredProfile]] = []
+    for team in teams:
+        members: list[StructuredProfile] = []
+        for member in team.members:
+            person = by_id.get(member.id) or by_name.get(_name_key(member.name))
+            if person is None:
+                raise HTTPException(status_code=400, detail=f"Can't find {member.name} on the roster.")
+            members.append(person)
+        hydrated.append(members)
+    return hydrated
+
+
+def _live_assignment_teams(
+    course: Course | None,
+    req_teams: list[TeamResult],
+    profiles: list[StructuredProfile],
+) -> tuple[list[list[StructuredProfile]], list[str]]:
+    if course is not None:
+        stored = _assignment_teams.get(course.id)
+        opt = _assignments.get(course.id)
+        if stored:
+            team_ids = [t.team_id for t in opt.teams] if opt else [f"team-{i}" for i in range(len(stored))]
+            return copy.deepcopy(stored), team_ids
+    raw = _hydrate_teams(req_teams, profiles)
+    return raw, [t.team_id for t in req_teams]
+
+
 def _build_optimize_response(
     raw_teams: list[list[StructuredProfile]],
     profiles: list[StructuredProfile],
     course_ctx,
     vetoes: set,
     flag_note: str | None = None,
+    *,
+    skip_llm: bool = False,
+    skip_baseline: bool = False,
 ) -> OptimizeResponse:
-    teams = [_to_team_result(f"team-{i}", members, vetoes, course_ctx) for i, members in enumerate(raw_teams)]
+    teams = [
+        _to_team_result(f"team-{i}", members, vetoes, course_ctx, skip_llm=skip_llm)
+        for i, members in enumerate(raw_teams)
+    ]
     optimized_avg = sum(t.score for t in teams) / len(teams) if teams else 0.0
-    baseline_avg = random_baseline_score(
-        profiles,
-        vetoes,
-        course_ctx.team_size_min,
-        course_ctx.team_size_max,
-        team_count=getattr(course_ctx, "team_count", None),
-        focus_skills=getattr(course_ctx, "focus_skills", None),
-    )
-    improvement_pct = ((optimized_avg - baseline_avg) / abs(baseline_avg) * 100) if baseline_avg else 0.0
+    if skip_baseline:
+        baseline_avg = 0.0
+        improvement_pct = 0.0
+    else:
+        baseline_avg = random_baseline_score(
+            profiles,
+            vetoes,
+            course_ctx.team_size_min,
+            course_ctx.team_size_max,
+            team_count=None,
+            focus_skills=getattr(course_ctx, "focus_skills", None),
+        )
+        improvement_pct = ((optimized_avg - baseline_avg) / abs(baseline_avg) * 100) if baseline_avg else 0.0
     return OptimizeResponse(
         teams=teams,
         baseline_score=baseline_avg,
@@ -906,7 +950,7 @@ def create_course(req: CreateCourseRequest):
         grading_notes=notes,
         team_size_min=req.team_size_min,
         team_size_max=req.team_size_max,
-        team_count=req.team_count,
+        team_count=None,
         objective=notes,
         focus_skills=req.focus_skills,
         skill_labels=req.skill_labels,
@@ -1495,23 +1539,32 @@ def clarify(req: ClarifyRequest):
     return ParseResponse(profiles=updated)
 
 
-def _to_team_result(team_id: str, members: list[StructuredProfile], vetoes: set, course_ctx=None) -> TeamResult:
+def _to_team_result(
+    team_id: str,
+    members: list[StructuredProfile],
+    vetoes: set,
+    course_ctx=None,
+    *,
+    skip_llm: bool = False,
+) -> TeamResult:
     focus = getattr(course_ctx, "focus_skills", None) if course_ctx else None
     labels = getattr(course_ctx, "skill_labels", None) if course_ctx else None
     stats = team_stats(members, vetoes, focus)
     facts = team_facts(members, focus, labels)
-    rationale = generate_rationale(
-        [m.name for m in members],
-        stats["breakdown"],
-        facts["team_goal"],
-        extras={
-            "coverage": facts["coverage"],
-            "thin": facts["thin"],
-            "shared_windows": facts["shared_windows"],
-            "skill_peaks": facts.get("skill_peaks") or {},
-            "skill_labels": labels or None,
-        },
-    )
+    rationale = facts["rationale"]
+    if not skip_llm:
+        rationale = generate_rationale(
+            [m.name for m in members],
+            stats["breakdown"],
+            facts["team_goal"],
+            extras={
+                "coverage": facts["coverage"],
+                "thin": facts["thin"],
+                "shared_windows": facts["shared_windows"],
+                "skill_peaks": facts.get("skill_peaks") or {},
+                "skill_labels": labels or None,
+            },
+        ) or facts["rationale"]
     return TeamResult(
         team_id=team_id,
         members=[
@@ -1528,7 +1581,7 @@ def _to_team_result(team_id: str, members: list[StructuredProfile], vetoes: set,
         score=stats["avg"],
         breakdown=stats["breakdown"],
         violations=stats["violations"],
-        rationale=rationale or facts["rationale"],
+        rationale=rationale,
         shared_windows=facts["shared_windows"],
         team_goal=facts["team_goal"],
         coverage=facts["coverage"],
@@ -1579,38 +1632,41 @@ def flag(req: FlagRequest):
     vetoes = {tuple(sorted(pair)) for pair in req.vetoes}
     stored = _courses.get(req.course_id) if req.course_id else None
     ctx = stored.context() if stored is not None else req.course
-    profiles_by_id = {p.id: p for p in req.profiles}
+    profiles = list(req.profiles)
+    if stored is not None:
+        live = _ready_profiles(_collect_roster(stored))
+        by_name = {_name_key(p.name): p for p in live}
+        for person in profiles:
+            by_name[_name_key(person.name)] = person
+        profiles = list(by_name.values())
 
-    teams_as_people: list[list[StructuredProfile]] = [
-        [profiles_by_id[m.id] for m in t.members] for t in req.teams
-    ]
+    teams_as_people, team_ids = _live_assignment_teams(stored, req.teams, profiles)
+    try:
+        teams_as_people, flag_note = reoptimize_for_flag(
+            teams_as_people,
+            req.person_id,
+            vetoes,
+            ctx.team_size_min,
+            ctx.team_size_max,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
-    teams_as_people, flag_note = reoptimize_for_flag(
-        teams_as_people,
-        req.person_id,
-        vetoes,
-        ctx.team_size_min,
-        ctx.team_size_max,
-    )
-
-    team_ids = [t.team_id for t in req.teams]
     while len(team_ids) < len(teams_as_people):
         team_ids.append(f"team-{len(team_ids)}")
 
-    opt = _build_optimize_response(teams_as_people, req.profiles, ctx, vetoes, flag_note)
+    opt = _build_optimize_response(teams_as_people, profiles, ctx, vetoes, flag_note)
     # Keep teacher-assigned team_ids when the count is unchanged.
     if len(opt.teams) == len(team_ids):
         opt.teams = [
             t.model_copy(update={"team_id": team_ids[i]})
             for i, t in enumerate(opt.teams)
         ]
-    course = _courses.get(req.course_id) if req.course_id else None
-    if course is not None:
-        _persist_assignment(course, teams_as_people, opt)
-        person = profiles_by_id.get(req.person_id)
-        who = person.name if person else req.person_id
+    if stored is not None:
+        _persist_assignment(stored, teams_as_people, opt)
+        who = next((p.name for p in profiles if p.id == req.person_id), req.person_id)
         _notify(
-            course_id=course.id,
+            course_id=stored.id,
             to_name="",
             to_role="teacher",
             kind="team",
@@ -1618,6 +1674,87 @@ def flag(req: FlagRequest):
             body=opt.flag_note or f"{who} was reassigned after a {req.reason} flag.",
             student=who,
             reason=req.reason,
+        )
+        _save()
+    return opt
+
+
+@app.post("/api/move", response_model=OptimizeResponse)
+def move_student(req: MoveRequest):
+    stored = _courses.get(req.course_id) if req.course_id else None
+    ctx = stored.context() if stored is not None else req.course
+    profiles = list(req.profiles)
+    if stored is not None:
+        live = _ready_profiles(_collect_roster(stored))
+        by_name = {_name_key(p.name): p for p in live}
+        for person in profiles:
+            by_name[_name_key(person.name)] = person
+        profiles = list(by_name.values())
+
+    teams_as_people, team_ids = _live_assignment_teams(stored, req.teams, profiles)
+    req_ids = [t.team_id for t in req.teams]
+    if req.target_team_index is not None:
+        target_idx = req.target_team_index
+        if target_idx >= len(teams_as_people):
+            raise HTTPException(status_code=400, detail="That team isn't on this assignment.")
+    else:
+        try:
+            target_idx = team_ids.index(req.target_team_id)
+        except ValueError:
+            if req.target_team_id in req_ids and len(req_ids) == len(teams_as_people):
+                target_idx = req_ids.index(req.target_team_id)
+            else:
+                raise HTTPException(status_code=400, detail="That team isn't on this assignment.")
+    who_id = req.person_id
+    who_name = next((m.name for t in req.teams for m in t.members if m.id == req.person_id), "")
+    try:
+        teams_as_people, note = move_person_to_team(
+            teams_as_people,
+            who_id,
+            target_idx,
+            ctx.team_size_min,
+            ctx.team_size_max,
+        )
+    except ValueError:
+        if not who_name:
+            raise HTTPException(status_code=400, detail=f"Student {req.person_id} is not on a team.")
+        try:
+            teams_as_people, note = move_person_to_team(
+                teams_as_people,
+                who_name,
+                target_idx,
+                ctx.team_size_min,
+                ctx.team_size_max,
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
+    opt = _build_optimize_response(
+        teams_as_people,
+        profiles,
+        ctx,
+        set(),
+        note,
+        skip_llm=True,
+        skip_baseline=True,
+    )
+    if len(opt.teams) == len(team_ids):
+        opt.teams = [
+            t.model_copy(update={"team_id": team_ids[i]})
+            for i, t in enumerate(opt.teams)
+        ]
+    if stored is not None:
+        _persist_assignment(stored, teams_as_people, opt)
+        who = next((p.name for p in profiles if p.id == req.person_id), req.person_id)
+        dest_label = next((f"Team {i + 1:02d}" for i, tid in enumerate(team_ids) if tid == req.target_team_id), "another team")
+        _notify(
+            course_id=stored.id,
+            to_name="",
+            to_role="teacher",
+            kind="team",
+            title=f"{who} was moved",
+            body=opt.flag_note or f"{who} was moved to {dest_label}.",
+            student=who,
         )
         _save()
     return opt

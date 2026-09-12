@@ -1,9 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { Plus, Users, X } from "lucide-react";
-import { addCourseStaff, flagStudent, loadRoster, optimizeTeams, resolveConcern, setRematchPermission } from "../api";
+import { addCourseStaff, loadRoster, moveStudent, optimizeTeams, resolveConcern, setRematchPermission } from "../api";
 import {
   FLAG_REASON_LABELS,
-  FLAG_REASONS,
   CONFLICT_LABELS,
   GOAL_LABELS,
   ROLE_LABELS,
@@ -12,7 +11,6 @@ import {
   toCourseContext,
   type ConcernRecord,
   type Course,
-  type FlagReason,
   type OptimizeResponse,
   type RosterResponse,
   type StructuredProfile,
@@ -25,7 +23,7 @@ import SearchField from "./SearchField";
 import StatCard from "./StatCard";
 import AvailabilityStrip from "./AvailabilityStrip";
 import { SkillBars } from "./WeekCalendar";
-import { teamPlan, teamPlanHint } from "../lib/teams";
+import { moveMemberOnTeams, teamPlan, teamPlanHint } from "../lib/teams";
 import { Button } from "./ui/button";
 import { cn } from "../lib/utils";
 
@@ -39,6 +37,70 @@ interface Props {
 }
 
 type Filter = "all" | "flagged" | "open";
+
+function TeamMoveForm({
+  teamId,
+  members,
+  destinations,
+  disabled,
+  onMove,
+}: {
+  teamId: string;
+  members: { id: string; name: string }[];
+  destinations: { id: string; label: string }[];
+  disabled: boolean;
+  onMove: (personId: string, targetIndex: number) => void;
+}) {
+  const [personId, setPersonId] = useState(members[0]?.id ?? "");
+  const [targetId, setTargetId] = useState(destinations[0]?.id ?? "");
+
+  useEffect(() => {
+    if (!members.some((m) => m.id === personId)) setPersonId(members[0]?.id ?? "");
+  }, [members, personId]);
+
+  useEffect(() => {
+    if (!destinations.some((d) => d.id === targetId)) setTargetId(destinations[0]?.id ?? "");
+  }, [destinations, targetId]);
+
+  return (
+    <div className="mt-5 space-y-2">
+      <p className="text-sm font-semibold">Move a student</p>
+      <select
+        aria-label={`Student to move from ${teamId}`}
+        className="h-11 w-full rounded-xl border bg-background px-4 text-sm font-semibold"
+        disabled={disabled || members.length === 0}
+        value={personId}
+        onChange={(e) => setPersonId(e.target.value)}
+      >
+        {members.map((m) => (
+          <option key={m.id} value={m.id}>
+            {m.name}
+          </option>
+        ))}
+      </select>
+      <select
+        aria-label="Destination team"
+        className="h-11 w-full rounded-xl border bg-background px-4 text-sm font-semibold"
+        disabled={disabled || destinations.length === 0}
+        value={targetId}
+        onChange={(e) => setTargetId(e.target.value)}
+      >
+        {destinations.map((d) => (
+          <option key={d.id} value={d.id}>
+            {d.label}
+          </option>
+        ))}
+      </select>
+      <Button
+        className="w-full"
+        disabled={disabled || !personId || !targetId}
+        onClick={() => onMove(personId, Number(targetId))}
+      >
+        {disabled ? "Moving…" : "Move to that team"}
+      </Button>
+    </div>
+  );
+}
 
 function statusOf(concern: ConcernRecord | null, rematch: boolean, pending: boolean) {
   if (pending) return { label: "Needs chat", tone: "warn" as const };
@@ -58,7 +120,8 @@ export default function AdminDashboard({
   const [roster, setRoster] = useState<RosterResponse | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [result, setResult] = useState<OptimizeResponse | null>(null);
-  const [busy, setBusy] = useState<"load" | "opt" | "flag" | "staff" | null>(null);
+  const [busy, setBusy] = useState<"load" | "opt" | "flag" | "move" | "staff" | null>(null);
+  const [note, setNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<"students" | "teams">("students");
   const [taOpen, setTaOpen] = useState(false);
@@ -96,9 +159,11 @@ export default function AdminDashboard({
 
   const readyProfiles = profiles.filter((p) => !isPendingProfile(p));
   const flagged = profiles.filter((p) => concernFor(p)?.status === "open").length;
-  const plan = teamPlan(readyProfiles.length, course.team_size_min, course.team_size_max, course.team_count);
+  const plan = teamPlan(readyProfiles.length, course.team_size_min, course.team_size_max);
+  const planHint = teamPlanHint(readyProfiles.length, course.team_size_min, course.team_size_max);
   const liveAssignment = Boolean(result?.teams.length);
   const assigned = new Set(result?.teams.flatMap((t) => t.members.map((m) => m.name.trim().toLowerCase())) ?? []);
+  const placed = readyProfiles.filter((p) => assigned.has(p.name.trim().toLowerCase())).length;
   const unassigned = profiles.filter((p) => !assigned.has(p.name.trim().toLowerCase())).length;
 
   const visible = useMemo(() => {
@@ -112,19 +177,25 @@ export default function AdminDashboard({
     });
   }, [assigned, filter, liveAssignment, profiles, query, result, roster]);
 
-  async function refreshRoster(opts?: { jumpTeams?: boolean }) {
-    setBusy("load");
-    setError(null);
+  async function refreshRoster(opts?: { jumpTeams?: boolean; silent?: boolean }) {
+    if (!opts?.silent) {
+      setBusy("load");
+      setError(null);
+    }
     try {
       const res = await loadRoster(course.id, 20, actor);
       setRoster(res);
       setSelectedId((cur) => (cur && res.profiles.some((p) => p.id === cur) ? cur : res.profiles[0]?.id ?? null));
-      setResult(res.assignment ?? null);
-      if (opts?.jumpTeams && res.assignment?.teams.length) setTab("teams");
+      if (res.assignment?.teams.length) {
+        setResult(res.assignment);
+        if (opts?.jumpTeams) setTab("teams");
+      } else if (!opts?.silent) {
+        setResult(null);
+      }
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Couldn't load the roster.");
+      if (!opts?.silent) setError(e instanceof Error ? e.message : "Couldn't load the roster.");
     } finally {
-      setBusy(null);
+      if (!opts?.silent) setBusy(null);
     }
   }
 
@@ -170,15 +241,39 @@ export default function AdminDashboard({
     }
   }
 
-  async function flag(personId: string, reason: FlagReason) {
-    if (!result) return;
-    setBusy("flag");
+  async function move(personId: string, targetIndex: number) {
+    if (!result || !personId || !Number.isFinite(targetIndex)) return;
+    const preview = moveMemberOnTeams(
+      result.teams,
+      personId,
+      targetIndex,
+      course.team_size_min,
+      course.team_size_max,
+    );
+    if (!preview) {
+      setError("Couldn't move that student.");
+      return;
+    }
+    setResult({ ...result, teams: preview.teams });
+    setNote(preview.note);
     setError(null);
+    setTab("teams");
+    setBusy("move");
     try {
-      await flagStudent(readyProfiles, result.teams, personId, reason, ctx, course.id);
-      await refreshRoster();
+      const res = await moveStudent(
+        readyProfiles,
+        result.teams,
+        personId,
+        result.teams[targetIndex]?.team_id ?? "",
+        ctx,
+        course.id,
+        targetIndex,
+      );
+      if (res.teams.length) setResult(res);
+      setNote(res.flag_note || preview.note);
+      await refreshRoster({ jumpTeams: true, silent: true });
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Couldn't re-optimize.");
+      setError(e instanceof Error ? e.message : "Couldn't move that student.");
     } finally {
       setBusy(null);
     }
@@ -264,7 +359,7 @@ export default function AdminDashboard({
         <StatCard
           label="Roster"
           value={profiles.length}
-          hint={teamPlanHint(profiles.length, course.team_size_min, course.team_size_max, course.team_count)}
+          hint={planHint}
         />
         <StatCard label="Flagged" value={flagged} hint={flagged ? "Need a look" : "None open"} />
         <StatCard
@@ -272,9 +367,9 @@ export default function AdminDashboard({
           value={liveAssignment ? result?.teams.length ?? 0 : plan.count}
           hint={
             liveAssignment
-              ? `${profiles.length} placed · ${result?.teams.length} of ${plan.count}`
+              ? `${placed} placed · ${result?.teams.length} teams`
               : plan.count
-                ? `Will form ${teamPlanHint(profiles.length, course.team_size_min, course.team_size_max, course.team_count)}`
+                ? `Will form ${planHint}`
                 : "Not enough students yet"
           }
         />
@@ -286,6 +381,7 @@ export default function AdminDashboard({
       </div>
 
       {error && <p className="mt-5 rounded-xl bg-warn-soft p-3 text-sm font-semibold text-warn">{error}</p>}
+      {note && !error && <p className="mt-5 rounded-xl bg-accent-soft p-3 text-sm font-semibold">{note}</p>}
 
       <div className="mt-8 flex gap-1 border-b">
         {(["students", "teams"] as const).map((id) => (
@@ -483,7 +579,7 @@ export default function AdminDashboard({
           <Users className="mx-auto text-primary" />
           <h2 className="mt-4 font-display text-2xl font-medium tracking-[-0.03em]">No teams yet</h2>
           <p className="mt-2 text-muted-foreground">
-            {teamPlanHint(readyProfiles.length, course.team_size_min, course.team_size_max, course.team_count)}. Students still in chat stay unassigned until they finish.
+            {planHint}. Students still in chat stay unassigned until they finish.
           </p>
           <Button className="mt-6" disabled={busy !== null || readyProfiles.length < course.team_size_min} onClick={() => void formTeams()}>
             <Users /> Form teams
@@ -549,28 +645,18 @@ export default function AdminDashboard({
                     labels={Object.fromEntries(skillFields.map((s) => [s.key, s.label]))}
                   />
                 </div>
-                <label className="mt-5 block">
-                  <span className="mb-2 block text-sm font-semibold">Move a student</span>
-                  <select
-                    className="h-11 w-full rounded-xl border bg-background px-4 text-sm font-semibold"
-                    disabled={busy !== null}
-                    defaultValue=""
-                    onChange={(e) => {
-                      const [personId, reason] = e.target.value.split(":");
-                      if (personId && reason) void flag(personId, reason as FlagReason);
-                      e.target.value = "";
-                    }}
-                  >
-                    <option value="">Choose a student and reason</option>
-                    {team.members.map((m) =>
-                      FLAG_REASONS.map((r) => (
-                        <option key={`${m.id}-${r.value}`} value={`${m.id}:${r.value}`}>
-                          {m.name} · {r.label}
-                        </option>
-                      )),
-                    )}
-                  </select>
-                </label>
+                <TeamMoveForm
+                  teamId={team.team_id}
+                  members={team.members.map((m) => ({ id: m.id, name: m.name }))}
+                  destinations={result.teams
+                    .map((other, otherIdx) => ({
+                      id: String(otherIdx),
+                      label: `Team ${String(otherIdx + 1).padStart(2, "0")} · ${other.members.length} people`,
+                    }))
+                    .filter((other) => other.id !== String(idx))}
+                  disabled={busy === "move"}
+                  onMove={(personId, targetIndex) => void move(personId, targetIndex)}
+                />
               </article>
             );
           })}
