@@ -99,7 +99,7 @@ export default function CoursePicker({ name, role, staffKind, canCreateCourse, o
                 ? staffKind === "ta"
                   ? "You only see the course you TA. Other courses stay off this desk."
                   : "Only courses you staff appear here."
-                : "Click a course to join its roster. That enrollment is saved. Or add a course — Faker fills 20 classmates the first time only."
+                : "Click a course to join its roster. That enrollment is saved. Or add a course, and Faker fills 20 classmates the first time only."
             }
           />
           {canAdd && !creating && (

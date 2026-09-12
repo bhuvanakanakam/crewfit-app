@@ -481,7 +481,7 @@ export default function AdminDashboard({
                                         {s.label}
                                       </Chip>
                                     ))
-                                  : <span className="text-sm text-muted-foreground">—</span>}
+                                  : <span className="text-sm text-muted-foreground">none</span>}
                               </span>
                             </td>
                             <td className="px-6 py-5">

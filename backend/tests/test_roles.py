@@ -213,6 +213,56 @@ def test_normalized_tables_roundtrip():
     assert snap["enroll"]["c1"] == ["ada"]
 
 
+def test_local_register_then_password_login():
+    created = client.post(
+        "/api/auth/register",
+        json={
+            "name": "Zed Signup Test",
+            "email": "zed.signup.test@squadly.edu",
+            "password": "Riley-Pass-26",
+            "requested_role": "student",
+        },
+    )
+    assert created.status_code == 200
+    body = created.json()
+    assert body["name"] == "Zed Signup Test"
+    assert body["role"] == "student"
+    again = client.post(
+        "/api/auth/login",
+        json={"email": "zed.signup.test@squadly.edu", "password": "Riley-Pass-26", "requested_role": "student"},
+    )
+    assert again.status_code == 200
+    assert again.json()["name"] == "Zed Signup Test"
+    clash = client.post(
+        "/api/auth/register",
+        json={
+            "name": "Someone Else",
+            "email": "zed.signup.test@squadly.edu",
+            "password": "Riley-Pass-26",
+            "requested_role": "student",
+        },
+    )
+    assert clash.status_code == 409
+
+
+def test_local_register_blocked_when_auth0_configured(monkeypatch):
+    import app.config as cfg
+    import app.main as main
+
+    monkeypatch.setattr(cfg, "AUTH0_DOMAIN", "example.us.auth0.com")
+    monkeypatch.setattr(main.config, "AUTH0_DOMAIN", "example.us.auth0.com")
+    res = client.post(
+        "/api/auth/register",
+        json={
+            "name": "Pat Lee",
+            "email": "pat.lee@squadly.edu",
+            "password": "Pat-Pass-26",
+            "requested_role": "student",
+        },
+    )
+    assert res.status_code == 401
+
+
 def test_student_cannot_enroll_in_staffed_course():
     added = client.post(
         "/api/courses/15112/staff",

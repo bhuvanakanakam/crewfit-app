@@ -1,3 +1,5 @@
+export const INTERVIEWER_NAME = "Scotty";
+
 export type GoalType = "pass" | "grade_A" | "research" | "deep_mastery";
 
 export const ALL_SKILL_KEYS = ["technical", "writing", "analysis", "presentation"] as const;
@@ -91,7 +93,7 @@ export function isPendingProfile(profile: StructuredProfile | null | undefined):
   return (profile.bio || "").trim() === "Enrolled in the course.";
 }
 
-export function hasOfficialTeam(match: MatchResponse | null | undefined): boolean {
+export function hasOfficialTeam(match: MatchResponse | null | undefined): match is MatchResponse {
   return Boolean(match && !match.waiting && match.team.length);
 }
 
@@ -106,6 +108,28 @@ export interface ChatResponse {
   reply: string;
   ready: boolean;
   profile: StructuredProfile | null;
+  needs_confirm?: boolean;
+  notes?: string[];
+}
+
+export interface VoiceSession {
+  token: string;
+  expires_at?: number | null;
+  model: string;
+  voice: string;
+  instructions: string;
+  tools: unknown[];
+  ws_url: string;
+  turn_detection?: Record<string, unknown>;
+}
+
+export interface VoiceRecordResult {
+  accepted: boolean;
+  ready: boolean;
+  profile: StructuredProfile | null;
+  notes: string[];
+  missing: string[];
+  recap: string;
 }
 
 export interface TeamMember {

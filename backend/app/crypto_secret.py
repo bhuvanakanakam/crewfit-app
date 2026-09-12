@@ -1,6 +1,6 @@
 """Team-shared wrap for secrets that are committed as ciphertext.
 
-Anyone who can clone the repo can decrypt — the unlock lives in this file so
+Anyone who can clone the repo can decrypt. The unlock lives in this file so
 teammates need no extra setup. This keeps the raw xAI key out of git (and out
 of secret scanners that look for an `xai-` prefix). It is not a lock against
 people who have the source.
@@ -40,4 +40,4 @@ def decrypt_secret(token: str) -> str:
     try:
         return _fernet().decrypt(token.strip().encode()).decode()
     except InvalidToken as exc:
-        raise RuntimeError("Could not decrypt secret — DOTSLASH_UNLOCK does not match ciphertext.") from exc
+        raise RuntimeError("Could not decrypt secret: DOTSLASH_UNLOCK does not match ciphertext.") from exc

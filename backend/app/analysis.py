@@ -137,7 +137,7 @@ def apply_swap(teams: list[list], swap: dict):
 def _best_subset_resolve(teams: list[list], person_id: str, vetoes: set, min_size: int, max_size: int):
     """When a single swap can't help, re-solve the flagged person's team
     paired with each other team (the affected subset) and keep the best
-    improving reassignment — leaves every other team untouched."""
+    improving reassignment, leaves every other team untouched."""
     current_idx, _person = _locate_person(teams, person_id)
     before = total_score(teams, vetoes)
     best = None
@@ -195,8 +195,8 @@ def reoptimize_for_flag(
         return subset["teams"], note
 
     note = (
-        f"No improving single swap or local re-solve found for {person_name} — "
-        "this conflict looks structural (e.g. unique availability). "
+        f"No improving single swap or local re-solve found for {person_name}. "
+        "This conflict looks structural (e.g. unique availability). "
         "Adjust profiles or vetoes, then run Optimize again."
     )
     return teams, note

@@ -13,6 +13,8 @@ import type {
   StructuredProfile,
   SubmitResponse,
   TeamResult,
+  VoiceRecordResult,
+  VoiceSession,
 } from "./types";
 
 const BASE = import.meta.env.VITE_API_BASE ?? "";
@@ -60,6 +62,20 @@ export function listCourses(name?: string, role?: "student" | "teacher") {
   if (role) q.set("role", role);
   const suffix = q.toString() ? `?${q}` : "";
   return request<{ courses: Course[] }>(`/courses${suffix}`);
+}
+
+export function registerAccount(opts: {
+  name: string;
+  email: string;
+  password: string;
+  requested_role: "student" | "teacher";
+}) {
+  return post<LoginResponse>("/auth/register", {
+    name: opts.name.trim(),
+    email: opts.email.trim(),
+    password: opts.password,
+    requested_role: opts.requested_role,
+  });
 }
 
 export function loginAccount(opts: {
@@ -144,6 +160,31 @@ export function sendChat(
     profile: opts?.profile,
     focus: opts?.focus,
   });
+}
+
+export function startVoiceSession(
+  name: string,
+  course: CourseContext,
+  profile?: StructuredProfile | null,
+) {
+  return post<VoiceSession>("/voice/session", { name, course, profile: profile ?? null });
+}
+
+export function recordVoiceProgress(name: string, snapshot: Record<string, unknown>) {
+  return post<VoiceRecordResult>("/voice/record", { name, snapshot });
+}
+
+export async function speakReply(text: string, voiceId = "rex"): Promise<Blob> {
+  const res = await fetch(`${BASE}/api/speak`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text, voice_id: voiceId }),
+  });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({}));
+    throw new Error(detail.detail ?? `Couldn't speak that (${res.status})`);
+  }
+  return res.blob();
 }
 
 export function findMatch(

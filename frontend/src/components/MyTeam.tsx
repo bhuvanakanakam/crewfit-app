@@ -92,7 +92,7 @@ export default function MyTeam({
       <PageIntro
         kicker={course.name}
         title="Your team"
-        body="Names and shared facts only — everyone’s preferences stay private."
+        body="Names and shared facts only. Everyone’s preferences stay private."
       />
 
       {impactNote && (

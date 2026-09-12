@@ -1,0 +1,18 @@
+---
+description: Keep the Grok interview contract in sync when chat inference changes
+globs: backend/app/grok_client.py,frontend/src/components/ChatInterview.tsx,frontend/src/voice/**,docs/grok-interview.md
+alwaysApply: false
+---
+
+# Interview contract
+
+When you change how the student chat infers, probes, defaults, reviews, or uses voice, also update:
+
+- `docs/grok-interview.md` (source of truth for teammates)
+- `canvases` interview flow if that canvas is in this workspace
+
+# Copy
+
+Never use em dashes, in code, copy, prompts, or docs. Use a comma, colon, period, or
+parentheses. `humanize_reply()` strips them from model output; do not add them back by hand.
+Scotty introduces himself as "a Grok powered AI assistant".

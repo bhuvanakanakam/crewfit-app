@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { ChevronRight } from "lucide-react";
-import { loginAccount } from "../api";
+import { loginAccount, registerAccount } from "../api";
 import { useCrewAuth } from "../auth";
 import type { Role } from "../session";
 import type { LoginResponse } from "../types";
@@ -35,6 +35,8 @@ interface Props {
 export default function SignIn({ onSignIn, banner }: Props) {
   const auth = useCrewAuth();
   const [role, setRole] = useState<Role>("student");
+  const [mode, setMode] = useState<"login" | "signup">("login");
+  const [name, setName] = useState("");
   const [email, setEmail] = useState("maya.singh@squadly.edu");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
@@ -75,11 +77,40 @@ export default function SignIn({ onSignIn, banner }: Props) {
   }
 
   async function continueWithAuth0Signup() {
+    if (setupNeeded) {
+      setMode("signup");
+      setRole("student");
+      setEmail("");
+      setPassword("");
+      setLocalError(null);
+      return;
+    }
     await continueWithAuth0("signup");
   }
 
   async function submitDemo(e: FormEvent) {
     e.preventDefault();
+    if (mode === "signup") {
+      if (!name.trim() || !email.trim() || !password) {
+        setLocalError("Enter a name, email, and password to create an account.");
+        return;
+      }
+      setLocalError(null);
+      setBusy(true);
+      try {
+        const res = await registerAccount({
+          name: name.trim(),
+          email: email.trim(),
+          password,
+          requested_role: "student",
+        });
+        onSignIn(res, true);
+      } catch (err) {
+        setLocalError(asText(err) || "Couldn't create that account.");
+        setBusy(false);
+      }
+      return;
+    }
     if (!email.trim() || !password) {
       setLocalError("Enter the email and password stored in the database.");
       return;
@@ -106,7 +137,7 @@ export default function SignIn({ onSignIn, banner }: Props) {
               squadly
             </h1>
             <p className="mt-6 max-w-lg text-lg leading-relaxed text-muted-foreground sm:text-xl">
-              Teams that actually work together — matched on hours, goals, and how people like to ship.
+              Teams that actually work together, matched on hours, goals, and how people like to ship.
             </p>
             <ul className="mt-9 space-y-3 font-mono text-sm">
               <li>
@@ -124,10 +155,16 @@ export default function SignIn({ onSignIn, banner }: Props) {
 
         <section className="flex justify-center lg:justify-end">
           <form className="w-full max-w-md" onSubmit={(e) => void submitDemo(e)}>
-            <TerminalChrome title="login@squadly:~" bodyClassName="p-5 sm:p-7">
-              <div className="kicker">$ auth --role {role}</div>
-              <h2 className="mt-2 font-mono text-2xl font-semibold tracking-[-0.03em]">Find your people.</h2>
-              <p className="mt-2 text-sm text-muted-foreground">Choose the desk you need, then continue.</p>
+            <TerminalChrome title={mode === "signup" ? "signup@squadly:~" : "login@squadly:~"} bodyClassName="p-5 sm:p-7">
+              <div className="kicker">$ auth --{mode} --role {role}</div>
+              <h2 className="mt-2 font-mono text-2xl font-semibold tracking-[-0.03em]">
+                {mode === "signup" ? "Create your account." : "Find your people."}
+              </h2>
+              <p className="mt-2 text-sm text-muted-foreground">
+                {mode === "signup"
+                  ? "A name, email, and password. You can add Auth0 later."
+                  : "Choose the desk you need, then continue."}
+              </p>
 
               <div className="mt-6 grid grid-cols-2 rounded-md bg-muted p-1">
                 <Button
@@ -135,7 +172,7 @@ export default function SignIn({ onSignIn, banner }: Props) {
                   variant={role === "student" ? "default" : "ghost"}
                   onClick={() => {
                     setRole("student");
-                    setEmail("maya.singh@squadly.edu");
+                    if (mode === "login") setEmail("maya.singh@squadly.edu");
                     setLocalError(null);
                   }}
                 >
@@ -146,6 +183,7 @@ export default function SignIn({ onSignIn, banner }: Props) {
                   variant={role === "teacher" ? "default" : "ghost"}
                   onClick={() => {
                     setRole("teacher");
+                    setMode("login");
                     setEmail("priya.chen@squadly.edu");
                     setLocalError(null);
                   }}
@@ -155,6 +193,21 @@ export default function SignIn({ onSignIn, banner }: Props) {
               </div>
 
               <div className="mt-6 space-y-3">
+                {mode === "signup" && (
+                  <>
+                    <label htmlFor="signup-name" className="block font-mono text-xs text-primary">
+                      name
+                    </label>
+                    <input
+                      id="signup-name"
+                      type="text"
+                      value={name}
+                      onChange={(e) => setName(e.target.value)}
+                      className="h-11 w-full rounded-md border border-primary/25 bg-background px-3 font-mono text-sm outline-none ring-ring focus-visible:ring-2"
+                      autoComplete="name"
+                    />
+                  </>
+                )}
                 <label htmlFor="demo-email" className="block font-mono text-xs text-primary">
                   {role === "teacher" ? "user@instructor" : "user@student"}
                 </label>
@@ -186,14 +239,14 @@ export default function SignIn({ onSignIn, banner }: Props) {
                   Set Token Endpoint Authentication Method to None on this Auth0 SPA, then try again.
                 </p>
               )}
-              {setupNeeded && !error && (
+              {setupNeeded && mode === "login" && !error && (
                 <p className="mt-5 rounded-md bg-warn-soft p-3 font-mono text-sm text-warn">
-                  Auth0 isn’t configured. Add VITE_AUTH0_DOMAIN and VITE_AUTH0_CLIENT_ID, then restart the app.
+                  Auth0 isn’t configured. Demo login still works, or create a local account below.
                 </p>
               )}
 
               <Button size="lg" className="mt-6 w-full" type="submit" disabled={blocked}>
-                {busy ? "signing in…" : "./login --password"}
+                {busy ? (mode === "signup" ? "creating…" : "signing in…") : mode === "signup" ? "./signup" : "./login --password"}
                 <ChevronRight />
               </Button>
 
@@ -209,20 +262,39 @@ export default function SignIn({ onSignIn, banner }: Props) {
                 <ChevronRight />
               </Button>
 
-              {role === "student" && !auth.isAuthenticated && (
+              {role === "student" && !auth.isAuthenticated && mode === "login" && (
                 <Button
                   variant="ghost"
                   className="mt-2 w-full"
                   type="button"
-                  disabled={blocked || setupNeeded}
+                  disabled={blocked}
                   onClick={() => void continueWithAuth0Signup()}
                 >
                   Create an account
                 </Button>
               )}
 
+              {mode === "signup" && (
+                <Button
+                  variant="ghost"
+                  className="mt-2 w-full"
+                  type="button"
+                  disabled={blocked}
+                  onClick={() => {
+                    setMode("login");
+                    setEmail("maya.singh@squadly.edu");
+                    setPassword("");
+                    setLocalError(null);
+                  }}
+                >
+                  Back to sign in
+                </Button>
+              )}
+
               <p className="mt-5 font-mono text-[11px] leading-relaxed text-muted-foreground">
-                Auth0 / Google for new accounts. Demo email and password still work.
+                {setupNeeded
+                  ? "Create a local account here. When Auth0 is set, new accounts go through Google / Auth0 instead."
+                  : "Auth0 / Google for new accounts. Demo email and password still work."}
               </p>
             </TerminalChrome>
           </form>

@@ -234,6 +234,53 @@ class ChatResponse(BaseModel):
     reply: str
     ready: bool = False
     profile: Optional[StructuredProfile] = None
+    # True at the review point, student can still keep chatting to course-correct.
+    needs_confirm: bool = False
+    notes: list[str] = []
+
+
+class VoiceSessionRequest(BaseModel):
+    name: str
+    course: CourseContext = Field(
+        default_factory=lambda: CourseContext(
+            name="HackCMU Team Formation",
+            grading_notes="Collaborative project; teams of 3–4.",
+            team_size_min=3,
+            team_size_max=4,
+        )
+    )
+    # Set once the recap is on screen, so Scotty helps edit instead of interviewing again.
+    profile: Optional[StructuredProfile] = None
+
+
+class VoiceSessionResponse(BaseModel):
+    token: str
+    expires_at: Optional[int] = None
+    model: str
+    voice: str
+    instructions: str
+    tools: list[dict]
+    ws_url: str
+    turn_detection: dict = Field(default_factory=dict)
+
+
+class VoiceRecordRequest(BaseModel):
+    name: str
+    snapshot: dict = Field(default_factory=dict)
+
+
+class VoiceRecordResponse(BaseModel):
+    accepted: bool = True
+    ready: bool = False
+    profile: Optional[StructuredProfile] = None
+    notes: list[str] = []
+    missing: list[str] = []
+    recap: str = ""
+
+
+class SpeakRequest(BaseModel):
+    text: str
+    voice_id: str = "rex"
 
 
 class PublicTeammate(BaseModel):
@@ -307,6 +354,13 @@ class LoginRequest(BaseModel):
     email: Optional[str] = None
     password: Optional[str] = None
     requested_role: Literal["student", "teacher"]
+
+
+class RegisterRequest(BaseModel):
+    name: str
+    email: str
+    password: str
+    requested_role: Literal["student", "teacher"] = "student"
 
 
 class LoginResponse(BaseModel):

@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 
 from fastapi import FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 
 from . import config
 from .analysis import move_person_to_team, random_baseline_score, reoptimize_for_flag, team_stats
@@ -15,7 +16,16 @@ from .auth0 import auth0_settings, name_from_claims, verify_id_token
 from .config import CORS_ORIGINS
 from .db import load_snapshot, save_snapshot
 from .facts import team_facts
-from .grok_client import chat_turn, extract_profile, generate_rationale, resolve_clarification, update_turn
+from .grok_client import (
+    apply_voice_snapshot,
+    chat_turn,
+    create_voice_session,
+    extract_profile,
+    generate_rationale,
+    resolve_clarification,
+    synthesize_speech,
+    update_turn,
+)
 from .models import (
     Account,
     ChatRequest,
@@ -31,6 +41,7 @@ from .models import (
     FlagRequest,
     LoginRequest,
     LoginResponse,
+    RegisterRequest,
     MarkReadRequest,
     MatchRequest,
     MatchResponse,
@@ -47,11 +58,16 @@ from .models import (
     RematchPermissionRequest,
     ResolveConcernRequest,
     RosterResponse,
+    SpeakRequest,
     StaffRequest,
     StructuredProfile,
     SubmitResponse,
     TeamMember,
     TeamResult,
+    VoiceRecordRequest,
+    VoiceRecordResponse,
+    VoiceSessionRequest,
+    VoiceSessionResponse,
 )
 from .solver import solve_teams
 from .synthetic import generate_cohort
@@ -69,7 +85,7 @@ app.add_middleware(
 
 # People persist across courses. Enrollments, matches, and the official
 # assignment are per-course. Student "your team" and the teacher Teams tab
-# read the same solve — they used to run two independent solvers.
+# read the same solve, they used to run two independent solvers.
 _people: dict[str, StructuredProfile] = {}
 _courses: dict[str, Course] = {}
 _enroll: dict[str, set[str]] = {}
@@ -470,7 +486,7 @@ def _course_prompt(course_or_ctx) -> str:
         for key in (getattr(course_or_ctx, "focus_skills", None) or [])
     ]
     objective = (getattr(course_or_ctx, "objective", None) or getattr(course_or_ctx, "grading_notes", None) or "").strip()
-    text = f"{course_or_ctx.name} — {objective}".strip(" —")
+    text = f"{course_or_ctx.name}: {objective}".strip(" :")
     if skills:
         text = f"{text}. Skills that matter: {', '.join(skills)}"
     return text
@@ -926,6 +942,41 @@ def login(req: LoginRequest, authorization: str | None = Header(default=None)):
     )
 
 
+@app.post("/api/auth/register", response_model=LoginResponse)
+def register(req: RegisterRequest):
+    """Local email signup. Disabled once Auth0 is configured."""
+    domain, _audience = auth0_settings()
+    if domain or config.AUTH0_DOMAIN:
+        raise HTTPException(status_code=401, detail="Create an account with Auth0.")
+    if req.requested_role == "teacher":
+        raise HTTPException(
+            status_code=403,
+            detail="Staff accounts are added by an instructor. Create a student account instead.",
+        )
+    name = req.name.strip()
+    email = req.email.strip()
+    password = req.password or ""
+    if not name:
+        raise HTTPException(status_code=400, detail="Enter a name.")
+    if "@" not in email or "." not in email.split("@")[-1]:
+        raise HTTPException(status_code=400, detail="Enter a valid email.")
+    if len(password) < 8:
+        raise HTTPException(status_code=400, detail="Password needs at least 8 characters.")
+    if _find_account(email=email, name=""):
+        raise HTTPException(status_code=409, detail="That email already has an account. Sign in instead.")
+    if _find_account(name=name):
+        raise HTTPException(status_code=409, detail="That name is already taken.")
+    acc = _bind_account(name, "student", email=email, password_hash=_hash_password(password))
+    _save()
+    return LoginResponse(
+        name=acc.name,
+        role="student",
+        staff_kind="none",
+        can_create_course=True,
+        courses=_visible_courses(acc.name, "student"),
+    )
+
+
 @app.post("/api/courses", response_model=CourseView)
 def create_course(req: CreateCourseRequest):
     actor = req.actor.strip()
@@ -1121,8 +1172,8 @@ def _apply_pref_to_team(course: Course, stored: StructuredProfile) -> PrefImpact
         _concerns[_match_key(course.id, stored.name)] = rec
         message = (
             f"This update lowered your team's fit by {abs(delta_pct):.0f}%. "
-            "Your teacher was notified. Teammates can still work with you — "
-            "the team stays unless a rematch is approved."
+            "Your teacher was notified. Teammates can still work with you. "
+            "The team stays unless a rematch is approved."
         )
         teacher_title = f"{stored.name} is affecting their team"
         teacher_body = note
@@ -1251,13 +1302,13 @@ def cohort(
     count: int = Query(16, ge=4, le=40),
     seed: int | None = Query(7),
 ):
-    """Sample class with full profile fields — organizer/demo only."""
+    """Sample class with full profile fields, organizer/demo only."""
     return ParseResponse(profiles=generate_cohort(exclude_name="", count=count, seed=seed))
 
 
 @app.post("/api/chat", response_model=ChatResponse)
 def chat(req: ChatRequest):
-    """Student personality interview with Grok — one turn at a time."""
+    """Student personality interview with Grok, one turn at a time."""
     name = req.name.strip() or "there"
     course_context = _course_prompt(req.course)
     messages = [{"role": m.role, "content": m.content} for m in req.messages]
@@ -1281,10 +1332,72 @@ def chat(req: ChatRequest):
             role=p["role"],
             conflict_mode=p.get("conflict_mode", "vote"),
             confidence=float(p.get("confidence", 0.85)),
-            clarifying_questions=[],
+            clarifying_questions=list(p.get("clarifying_questions") or raw.get("notes") or []),
         )
 
-    return ChatResponse(reply=raw["reply"], ready=bool(raw.get("ready") and profile), profile=profile)
+    ready = bool(raw.get("ready") and profile)
+    return ChatResponse(
+        reply=raw["reply"],
+        ready=ready,
+        profile=profile,
+        needs_confirm=ready,
+        notes=list(raw.get("notes") or []),
+    )
+
+
+@app.post("/api/voice/session", response_model=VoiceSessionResponse)
+def voice_session(req: VoiceSessionRequest):
+    """Mint a short-lived Grok Voice token for the browser. The xAI key stays on the server."""
+    name = req.name.strip() or "there"
+    course_context = _course_prompt(req.course)
+    review = req.profile.model_dump() if req.profile else None
+    try:
+        return VoiceSessionResponse(**create_voice_session(name, course_context, review))
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Couldn't start a voice session ({e}).") from e
+
+
+@app.post("/api/voice/record", response_model=VoiceRecordResponse)
+def voice_record(req: VoiceRecordRequest):
+    name = req.name.strip() or "there"
+    raw = apply_voice_snapshot(name, req.snapshot or {})
+    profile = None
+    if raw.get("ready") and raw.get("profile"):
+        p = raw["profile"]
+        profile = StructuredProfile(
+            id="you",
+            name=name,
+            bio="Shared over voice",
+            goal=p["goal"],
+            availability=p["availability"],
+            skills=p["skills"],
+            hours=p["hours"],
+            role=p["role"],
+            conflict_mode=p.get("conflict_mode", "vote"),
+            confidence=float(p.get("confidence", 0.85)),
+            clarifying_questions=list(p.get("clarifying_questions") or raw.get("notes") or []),
+        )
+    return VoiceRecordResponse(
+        accepted=True,
+        ready=bool(raw.get("ready") and profile),
+        profile=profile,
+        notes=list(raw.get("notes") or []),
+        missing=list(raw.get("missing") or []),
+        recap=raw.get("recap") or "",
+    )
+
+
+@app.post("/api/speak")
+def speak(req: SpeakRequest):
+    try:
+        audio, content_type = synthesize_speech(req.text, req.voice_id or "rex")
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Couldn't speak that ({e}).") from e
+    return Response(content=audio, media_type=content_type)
 
 
 @app.post("/api/match", response_model=MatchResponse)
