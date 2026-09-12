@@ -1,8 +1,9 @@
 from typing import Literal, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from .slots import normalize_availability
 
 GoalType = Literal["pass", "grade_A", "research", "deep_mastery"]
-Slot = Literal["weekday_morning", "weekday_afternoon", "weekday_evening", "weekend"]
 Role = Literal["lead", "contributor", "either"]
 ConflictMode = Literal["vote", "rotate_lead", "escalate", "defer_to_invested"]
 
@@ -20,10 +21,10 @@ class PersonInput(BaseModel):
 
 
 class Skills(BaseModel):
-    technical: int = Field(3, ge=1, le=5)
-    writing: int = Field(3, ge=1, le=5)
-    analysis: int = Field(3, ge=1, le=5)
-    presentation: int = Field(3, ge=1, le=5)
+    technical: int = Field(3, ge=1, le=5)  # coding / building
+    writing: int = Field(3, ge=1, le=5)  # docs / reports
+    analysis: int = Field(3, ge=1, le=5)  # data / research
+    presentation: int = Field(3, ge=1, le=5)  # demos / pitching
 
 
 class StructuredProfile(BaseModel):
@@ -31,13 +32,21 @@ class StructuredProfile(BaseModel):
     name: str
     bio: str
     goal: GoalType
-    availability: list[Slot]
+    # day×time slots, e.g. "mon_evening", "sat_afternoon"
+    availability: list[str]
     skills: Skills
     hours: int = Field(8, ge=1, le=40)
     role: Role = "either"
     conflict_mode: ConflictMode = "vote"
     confidence: float = 1.0
     clarifying_questions: list[str] = []
+
+    @field_validator("availability", mode="before")
+    @classmethod
+    def _normalize_slots(cls, v):
+        if not isinstance(v, list):
+            return ["wed_evening"]
+        return normalize_availability([str(x) for x in v])
 
 
 class ParseRequest(BaseModel):
@@ -64,7 +73,7 @@ class ClarifyRequest(BaseModel):
 class OptimizeRequest(BaseModel):
     course: CourseContext
     profiles: list[StructuredProfile]
-    vetoes: list[list[str]] = []  # list of [person_id, person_id] pairs
+    vetoes: list[list[str]] = []
 
 
 class TeamMember(BaseModel):
@@ -87,6 +96,7 @@ class OptimizeResponse(BaseModel):
     teams: list[TeamResult]
     baseline_score: float
     improvement_pct: float
+    flag_note: Optional[str] = None
 
 
 class FlagRequest(BaseModel):
@@ -95,3 +105,53 @@ class FlagRequest(BaseModel):
     teams: list[TeamResult]
     person_id: str
     reason: Literal["schedule", "goal", "workload", "other"]
+    vetoes: list[list[str]] = []
+
+
+class ChatMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str
+
+
+class ChatRequest(BaseModel):
+    name: str
+    messages: list[ChatMessage]
+    course: CourseContext = Field(
+        default_factory=lambda: CourseContext(
+            name="HackCMU Team Formation",
+            grading_notes="Collaborative project; teams of 3–4.",
+            team_size_min=3,
+            team_size_max=4,
+        )
+    )
+
+
+class ChatResponse(BaseModel):
+    reply: str
+    ready: bool = False
+    profile: Optional[StructuredProfile] = None
+
+
+class PublicTeammate(BaseModel):
+    id: str
+    name: str
+    is_you: bool = False
+
+
+class MatchRequest(BaseModel):
+    profile: StructuredProfile
+    course: CourseContext = Field(
+        default_factory=lambda: CourseContext(
+            name="HackCMU Team Formation",
+            grading_notes="Collaborative project; teams of 3–4.",
+            team_size_min=3,
+            team_size_max=4,
+        )
+    )
+    cohort_size: int = Field(16, ge=4, le=40)
+
+
+class MatchResponse(BaseModel):
+    team: list[PublicTeammate]
+    rationale: str
+    cohort_size: int
