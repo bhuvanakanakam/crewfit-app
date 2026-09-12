@@ -1,149 +1,110 @@
 import { useState } from "react";
 import "./app.css";
-import CourseSetup from "./components/CourseSetup";
-import RosterInput from "./components/RosterInput";
-import ProfileReview from "./components/ProfileReview";
-import TeamResultsView from "./components/TeamResults";
-import { clarifyProfiles, flagTeammate, optimizeTeams, parseProfiles } from "./api";
-import type { CourseContext, FlagReason, OptimizeResponse, PersonInput, StructuredProfile } from "./types";
+import IntakeForm from "./components/IntakeForm";
+import MyTeam from "./components/MyTeam";
+import { findMatch } from "./api";
+import { DEFAULT_COURSE, type MatchResponse, type StructuredProfile } from "./types";
 
-type Stage = "course" | "roster" | "profiles" | "results";
-
-const DEFAULT_COURSE: CourseContext = {
-  name: "",
-  grading_notes: "",
-  team_size_min: 3,
-  team_size_max: 4,
-};
+type Stage = "intake" | "matching" | "team";
 
 export default function App() {
-  const [stage, setStage] = useState<Stage>("course");
-  const [course, setCourse] = useState<CourseContext>(DEFAULT_COURSE);
-  const [people, setPeople] = useState<PersonInput[]>([]);
-  const [profiles, setProfiles] = useState<StructuredProfile[]>([]);
-  const [results, setResults] = useState<OptimizeResponse | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [stage, setStage] = useState<Stage>("intake");
+  const [profile, setProfile] = useState<StructuredProfile | null>(null);
+  const [match, setMatch] = useState<MatchResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  async function handleParse() {
-    setLoading(true);
+  async function handleSubmit(p: StructuredProfile) {
+    setProfile(p);
+    setStage("matching");
     setError(null);
     try {
-      const res = await parseProfiles(course, people);
-      setProfiles(res.profiles);
-      setStage("profiles");
+      const res = await findMatch(p, DEFAULT_COURSE, 16);
+      setMatch(res);
+      setStage("team");
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Something went wrong parsing the roster.");
-    } finally {
-      setLoading(false);
+      setError(e instanceof Error ? e.message : "Couldn't find a team.");
+      setStage("intake");
     }
   }
 
-  async function handleResolveClarifications(profileId: string, answers: { question: string; answer: string }[]) {
+  function restart() {
+    setProfile(null);
+    setMatch(null);
     setError(null);
-    try {
-      const res = await clarifyProfiles(
-        course,
-        profiles,
-        answers.map((a) => ({ profile_id: profileId, question: a.question, answer: a.answer }))
-      );
-      setProfiles(res.profiles);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Couldn't resolve that clarification.");
-    }
+    setStage("intake");
   }
-
-  async function handleOptimize() {
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await optimizeTeams(course, profiles);
-      setResults(res);
-      setStage("results");
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "The solver couldn't find a feasible assignment.");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function handleFlag(personId: string, reason: FlagReason) {
-    if (!results) return;
-    setError(null);
-    try {
-      const res = await flagTeammate(course, profiles, results.teams, personId, reason);
-      setResults(res);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Couldn't re-optimize around that flag.");
-    }
-  }
-
-  const stageOrder: Stage[] = ["course", "roster", "profiles", "results"];
-  const stageLabel: Record<Stage, string> = {
-    course: "1 · Course",
-    roster: "2 · Roster",
-    profiles: "3 · Profiles",
-    results: "4 · Teams",
-  };
 
   return (
-    <div className="page">
-      <header className="topbar">
-        <div>
-          <div className="brand">
-            <h1>
-              Crew<span className="mark">Fit</span>
-            </h1>
+    <div className="cmu-app">
+      <div className="utility-bar">
+        <div className="utility-inner">
+          <nav aria-label="Audience">
+            <a href="https://www.cmu.edu/">CMU Home</a>
+            <span aria-hidden>|</span>
+            <span>Current Students</span>
+          </nav>
+          <div className="utility-actions">
+            <span className="pill-link">HackCMU</span>
           </div>
-          <p className="tagline">Constraint-based team formation for a cohort, not a coin flip.</p>
         </div>
-        <ol className="stages">
-          {stageOrder.map((s, i) => (
-            <li
-              key={s}
-              className={s === stage ? "active" : stageOrder.indexOf(stage) > i ? "done" : ""}
-            >
-              {stageLabel[s]}
-            </li>
-          ))}
-        </ol>
+      </div>
+
+      <header className="site-header">
+        <div className="site-header-inner">
+          <a className="wordmark" href="/" aria-label="Carnegie Mellon University — CrewFit">
+            <span className="wm-cmu">Carnegie Mellon University</span>
+            <span className="wm-product">CrewFit</span>
+          </a>
+          <nav className="main-nav" aria-label="Primary">
+            <span className={stage === "intake" ? "active" : ""}>1 · Your prefs</span>
+            <span className={stage !== "intake" ? "active" : ""}>2 · Your team</span>
+          </nav>
+        </div>
+        <div className="header-rule" />
       </header>
 
-      {error && <div className="error-banner">{error}</div>}
+      <main className="site-main">
+        <p className="breadcrumb">
+          <a href="https://www.cmu.edu/">CMU</a> / <span>CrewFit</span> /{" "}
+          <span>{stage === "team" ? "Your team" : "Team match"}</span>
+        </p>
 
-      {stage === "course" && (
-        <CourseSetup course={course} onChange={setCourse} onContinue={() => setStage("roster")} />
-      )}
+        {error && <div className="error-banner">{error}</div>}
 
-      {stage === "roster" && (
-        <RosterInput
-          people={people}
-          onChange={setPeople}
-          onBack={() => setStage("course")}
-          onSubmit={handleParse}
-          loading={loading}
-        />
-      )}
+        {stage === "intake" && (
+          <>
+            <h1 className="page-title">Find your project team</h1>
+            <p className="page-dek">
+              Tell us how you work in one short form. We match you with a constraint solver — you
+              only see your teammates and why, never anyone else’s answers.
+            </p>
+            <IntakeForm onSubmit={handleSubmit} />
+          </>
+        )}
 
-      {stage === "profiles" && (
-        <ProfileReview
-          profiles={profiles}
-          onChange={setProfiles}
-          onResolveClarifications={handleResolveClarifications}
-          onBack={() => setStage("roster")}
-          onSubmit={handleOptimize}
-          loading={loading}
-        />
-      )}
+        {stage === "matching" && (
+          <div className="matching-state">
+            <h1 className="page-title">Finding your team…</h1>
+            <p className="page-dek">Running the optimizer. Your preferences stay private.</p>
+          </div>
+        )}
 
-      {stage === "results" && results && (
-        <TeamResultsView results={results} onFlag={handleFlag} onBack={() => setStage("profiles")} />
-      )}
+        {stage === "team" && match && profile && (
+          <MyTeam result={match} yourName={profile.name} onRestart={restart} />
+        )}
+      </main>
 
-      <footer className="foot">
-        Backend: FastAPI + OR-Tools CP-SAT solver. Grok (xAI) handles free-text extraction, clarifying
-        questions, and rationale generation — see <code>backend/app/grok_client.py</code> for the one place
-        the API key is used.
+      <footer className="site-footer">
+        <div className="site-footer-inner">
+          <div>
+            <strong>Carnegie Mellon University</strong>
+            <p>5000 Forbes Avenue, Pittsburgh, PA 15213</p>
+          </div>
+          <p className="footer-note">
+            CrewFit · OR-Tools CP-SAT assigns teams · Grok explains the match · Preferences stay
+            private
+          </p>
+        </div>
       </footer>
     </div>
   );

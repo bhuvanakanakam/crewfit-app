@@ -1,6 +1,6 @@
 # CrewFit
 
-Constraint-based team formation for a cohort — parses free-text self-descriptions with Grok,
+Constraint- based team formation for a cohort — parses free-text self-descriptions with Grok,
 solves the actual team assignment with OR-Tools CP-SAT, and explains why each team was grouped
 the way it was. Built for HackCMU 2026 (Optimization track).
 
@@ -61,20 +61,15 @@ Open the URL Vite prints (typically `http://localhost:5173`). The dev server pro
 to `http://localhost:8000` automatically (see `frontend/vite.config.ts`), so both halves talk to
 each other with no extra config.
 
-## The flow
+## The flow (student)
 
-1. **Course** — name the course/cohort and its grading notes. This matters more than it looks:
-   grading notes are the context Grok uses to interpret what "pass," "grade A," "research," and
-   "deep mastery" even mean for this specific class.
-2. **Roster** — paste or type each person's free-text self-description (or load the sample
-   16-person cohort to try it immediately).
-3. **Profiles** — Grok's structured extraction comes back here. Anything ambiguous shows up as
-   an inline clarifying question; everything is also directly editable in the table, so you're
-   never blocked on a bad guess.
-4. **Teams** — the CP-SAT solver's output: teams, per-team compatibility breakdown, a plain-language
-   rationale, and a side-by-side comparison against randomly grouping the same roster. Each person
-   has a flag (⚑) button that triggers a local re-optimization (single best swap) rather than
-   reshuffling everyone.
+1. **Your prefs** — one short CMU-styled form (~1 minute). Up front you see exactly what’s needed:
+   goal, day×time availability grid (Mon–Sun × morning/afternoon/evening), hours/week, and four
+   named skills (Technical / Writing / Analysis / Presentation).
+2. **Your team** — CP-SAT match against a Faker cohort. You only see teammate **names** plus Grok’s
+   **why this team** line — never anyone else’s answers.
+
+Organizer-style `/api/parse`, `/optimize`, and `/flag` endpoints remain for offline pipeline tests.
 
 ## Solver notes (backend/app/solver.py)
 
@@ -95,6 +90,24 @@ conflict is structural (they're the only person free at a given time slot), no s
 fix it — you'd need a full re-solve of the affected subset. That's flagged as a TODO in
 `backend/app/analysis.py::best_swap_for_person` rather than silently pretending it always works.
 
+## Demo script (~2.5 min)
+
+1. **(15s)** Problem: people pick teammates on vibes; teams break on goals, schedule, workload, skill gaps.
+2. **(30s)** Load the sample roster; live-parse 2–3 ambiguous bios — show clarifying questions.
+3. **(45s)** Optimize; walk team cards, score bars, and Grok rationales. Mention vetoes if you set any.
+4. **(30s)** Point at CrewFit score vs random baseline.
+5. **(30s)** Flag someone → show the local re-optimize note (swap, subset re-solve, or structural no-op).
+6. **(10s)** Close: Optimization track — CP-SAT assigns; Grok only structures + explains.
+
+## Team roles (fill in names)
+
+| Area | Owner |
+|---|---|
+| Solver / scoring (`solver.py`, `scoring.py`) | _TBD_ |
+| Grok integration (`grok_client.py`) | _TBD_ |
+| Frontend flow | _TBD_ |
+| Demo / pitch | _TBD_ |
+
 ## Deploying
 
 - **Backend:** any container-friendly host works (Render, Fly.io, Railway, a plain VM). It's a
@@ -112,29 +125,26 @@ fix it — you'd need a full re-solve of the affected subset. That's flagged as 
 ```
 backend/
   app/
-    main.py          FastAPI routes: /api/parse, /clarify, /optimize, /flag
-    models.py         Pydantic request/response schemas
-    scoring.py         the compatibility model — no LLM calls in this file
+    main.py          FastAPI: /api/chat, /match (+ parse/optimize/flag for tests)
+    models.py         Pydantic schemas including student-facing MatchResponse
+    scoring.py         compatibility model — no LLM calls
     solver.py           OR-Tools CP-SAT team assignment
-    analysis.py          team scoring, random baseline, swap-based re-optimization
-    grok_client.py        the ONE file that talks to xAI — see above
+    analysis.py          scoring helpers + flag re-optimize
+    grok_client.py        chat_turn / extract / rationale — sole xAI touchpoint
+    synthetic.py          Faker cohort for student match demos
     config.py
   tests/
-    test_pipeline_small.py   8-person sanity check
-    test_pipeline_full.py     16-person cohort + flag/re-optimize path
+    test_pipeline_small.py
+    test_pipeline_full.py
   requirements.txt
   .env.example
 frontend/
   src/
-    App.tsx                 stage orchestration (course → roster → profiles → teams)
-    api.ts                    typed fetch wrappers for the four endpoints
-    types.ts                    shared TypeScript types, mirrors backend/app/models.py
-    sampleData.ts                the same 16-person sample cohort used in backend tests
+    App.tsx                   student stages: chat → matching → your team
+    api.ts                    /chat and /match
+    types.ts                  public teammate shape (name only) + student profile
     components/
-      CourseSetup.tsx
-      RosterInput.tsx
-      ProfileReview.tsx          structured table + inline clarifying questions
-      TeamResults.tsx              team cards, score breakdown, flag/re-optimize UI
-    index.css                       CMU-themed design tokens (Carnegie Red / Iron Gray)
-    app.css                           layout and component styles
+      ChatInterview.tsx       Grok personality chat
+      MyTeam.tsx              teammates + rationale (no prefs)
+    index.css / app.css
 ```

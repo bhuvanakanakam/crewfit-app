@@ -34,6 +34,7 @@ for t in opt_resp.teams:
 # --- exercise the flag / local re-optimization path ---
 flagged_person = opt_resp.teams[0].members[0]
 print(f"\nFlagging {flagged_person.name} (reason: schedule) for local re-optimization...")
-flag_resp = flag(FlagRequest(course=course, profiles=parse_resp.profiles, teams=opt_resp.teams, person_id=flagged_person.id, reason="schedule"))
+flag_resp = flag(FlagRequest(course=course, profiles=parse_resp.profiles, teams=opt_resp.teams, person_id=flagged_person.id, reason="schedule", vetoes=[]))
+print(f"Flag note: {flag_resp.flag_note}")
 for t in flag_resp.teams:
     print(f"{t.team_id}: {[m.name for m in t.members]}  score={t.score:.3f} violations={t.violations}")

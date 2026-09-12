@@ -1,7 +1,9 @@
+import copy
 import random
 from itertools import combinations
 
 from .scoring import pair_score
+from .solver import solve_teams
 
 BREAKDOWN_KEYS = ["goal", "avail", "skill", "workload"]
 
@@ -82,3 +84,70 @@ def apply_swap(teams: list[list], swap: dict):
     oi = other_team.index(swap["candidate"])
     current_team[ci], other_team[oi] = swap["candidate"], swap["person"]
     return teams
+
+
+def _best_subset_resolve(teams: list[list], person_id: str, vetoes: set, min_size: int, max_size: int):
+    """When a single swap can't help, re-solve the flagged person's team
+    paired with each other team (the affected subset) and keep the best
+    improving reassignment — leaves every other team untouched."""
+    current_idx = next(i for i, t in enumerate(teams) if any(m.id == person_id for m in t))
+    before = total_score(teams, vetoes)
+    best = None
+
+    for j, other_team in enumerate(teams):
+        if j == current_idx:
+            continue
+        subset = list(teams[current_idx]) + list(other_team)
+        try:
+            resolved = solve_teams(subset, min_size, max_size, vetoes, time_limit_s=3.0)
+        except RuntimeError:
+            continue
+        if len(resolved) != 2:
+            continue
+
+        trial = copy.deepcopy(teams)
+        trial[current_idx] = resolved[0]
+        trial[j] = resolved[1]
+        after = total_score(trial, vetoes)
+        delta = after - before
+        if delta > 0 and (best is None or delta > best["delta"]):
+            best = {"delta": delta, "teams": trial, "other_idx": j}
+
+    return best
+
+
+def reoptimize_for_flag(
+    teams: list[list],
+    person_id: str,
+    vetoes: set,
+    min_size: int,
+    max_size: int,
+) -> tuple[list[list], str]:
+    """Flag flow: try a single swap first; if that can't improve the score,
+    fall back to a CP-SAT re-solve of the affected two-team subset. Returns
+    (teams, human-readable note) so the UI never pretends a no-op worked."""
+    person_name = next(m.name for t in teams for m in t if m.id == person_id)
+
+    swap = best_swap_for_person(teams, person_id, vetoes)
+    if swap and swap["delta"] > 0:
+        apply_swap(teams, swap)
+        note = (
+            f"Swapped {swap['person'].name} with {swap['candidate'].name} "
+            f"(+{swap['delta']:.2f} on the two affected teams)."
+        )
+        return teams, note
+
+    subset = _best_subset_resolve(teams, person_id, vetoes, min_size, max_size)
+    if subset:
+        note = (
+            f"No single swap helped {person_name}; re-solved their team plus one "
+            f"neighbor team with CP-SAT (+{subset['delta']:.2f} overall)."
+        )
+        return subset["teams"], note
+
+    note = (
+        f"No improving single swap or local re-solve found for {person_name} — "
+        "this conflict looks structural (e.g. unique availability). "
+        "Adjust profiles or vetoes, then run Optimize again."
+    )
+    return teams, note
