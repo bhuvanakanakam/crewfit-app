@@ -76,7 +76,7 @@ class Course(BaseModel):
             grading_notes=self.objective or self.grading_notes or "",
             team_size_min=self.team_size_min,
             team_size_max=self.team_size_max,
-            team_count=self.team_count,
+            team_count=None,
             objective=self.objective or self.grading_notes or "",
             focus_skills=self.focus_skills,
             skill_labels=self.skill_labels,
@@ -196,6 +196,16 @@ class FlagRequest(BaseModel):
     person_id: str
     reason: Literal["schedule", "goal", "workload", "other"]
     vetoes: list[list[str]] = []
+    course_id: Optional[str] = None
+
+
+class MoveRequest(BaseModel):
+    course: CourseContext
+    person_id: str
+    target_team_id: str = ""
+    target_team_index: Optional[int] = Field(None, ge=0, le=40)
+    profiles: list[StructuredProfile] = []
+    teams: list[TeamResult] = []
     course_id: Optional[str] = None
 
 

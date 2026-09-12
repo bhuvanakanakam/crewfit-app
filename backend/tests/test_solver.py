@@ -3,9 +3,9 @@ from itertools import combinations
 import pytest
 
 from app.analysis import floor_score, legal_random_partition, random_baseline_score, team_stats, total_score
-from app.main import flag, optimize
-from app.models import CourseContext, FlagRequest, OptimizeRequest, Skills, StructuredProfile
-from app.solver import feasible_team_count, legal_team_sizes, solve_teams, solve_teams_detailed
+from app.main import flag, move_student, optimize
+from app.models import CourseContext, FlagRequest, MoveRequest, OptimizeRequest, Skills, StructuredProfile
+from app.solver import feasible_team_count, legal_team_sizes, packable_count, solve_teams, solve_teams_detailed
 
 
 def person(
@@ -191,3 +191,35 @@ def test_forced_team_count_splits_evenly():
 def test_forced_team_count_rejects_impossible():
     with pytest.raises(RuntimeError, match="Can't make 6 teams"):
         feasible_team_count(20, 4, 4, team_count=6)
+
+
+def test_packable_leaves_gap_unassigned():
+    assert packable_count(5, 3, 4) == 4
+    people = [person(f"p{i}") for i in range(5)]
+    result = solve_teams_detailed(people, 3, 4, set())
+    assert sum(len(team) for team in result.teams) == 4
+    assert all(3 <= len(team) <= 4 for team in result.teams)
+
+
+def test_move_student_puts_them_on_the_chosen_team():
+    people = [person(f"p{i}", hours=8 + (i % 4)) for i in range(8)]
+    opt = optimize(OptimizeRequest(course=COURSE, profiles=people, vetoes=[]))
+    assert len(opt.teams) == 2
+    source, dest = opt.teams[0], opt.teams[1]
+    person_id = source.members[0].id
+    moved = move_student(
+        MoveRequest(
+            course=COURSE,
+            profiles=people,
+            teams=opt.teams,
+            person_id=person_id,
+            target_team_id=dest.team_id,
+            target_team_index=1,
+        )
+    )
+    dest_ids = {m.id for t in moved.teams if t.team_id == dest.team_id for m in t.members}
+    src_ids = {m.id for t in moved.teams if t.team_id == source.team_id for m in t.members}
+    assert person_id in dest_ids
+    assert person_id not in src_ids
+    assert moved.flag_note
+    assert sum(len(t.members) for t in moved.teams) == 8

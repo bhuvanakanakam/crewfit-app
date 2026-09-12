@@ -189,6 +189,26 @@ export function flagStudent(
   });
 }
 
+export function moveStudent(
+  profiles: StructuredProfile[],
+  teams: TeamResult[],
+  personId: string,
+  targetTeamId: string,
+  course: CourseContext,
+  courseId?: string,
+  targetTeamIndex?: number,
+) {
+  return post<OptimizeResponse>("/move", {
+    course,
+    profiles,
+    teams,
+    person_id: personId,
+    target_team_id: targetTeamId,
+    target_team_index: targetTeamIndex,
+    course_id: courseId,
+  });
+}
+
 export function markNotificationsRead(ids: string[]) {
   return post<{ ok: boolean }>("/notifications/read", { ids });
 }
