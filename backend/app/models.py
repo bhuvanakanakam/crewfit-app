@@ -15,6 +15,22 @@ class CourseContext(BaseModel):
     team_size_max: int = 4
 
 
+class Course(BaseModel):
+    id: str
+    name: str
+    grading_notes: Optional[str] = ""
+    team_size_min: int = 3
+    team_size_max: int = 4
+
+    def context(self) -> CourseContext:
+        return CourseContext(
+            name=self.name,
+            grading_notes=self.grading_notes or "",
+            team_size_min=self.team_size_min,
+            team_size_max=self.team_size_max,
+        )
+
+
 class PersonInput(BaseModel):
     name: str
     bio: str
@@ -74,6 +90,7 @@ class OptimizeRequest(BaseModel):
     course: CourseContext
     profiles: list[StructuredProfile]
     vetoes: list[list[str]] = []
+    course_id: Optional[str] = None
 
 
 class TeamMember(BaseModel):
@@ -90,6 +107,10 @@ class TeamResult(BaseModel):
     breakdown: dict
     violations: int
     rationale: str
+    shared_windows: list[str] = []
+    team_goal: str = ""
+    coverage: list[str] = []
+    thin: list[str] = []
 
 
 class OptimizeResponse(BaseModel):
@@ -106,6 +127,7 @@ class FlagRequest(BaseModel):
     person_id: str
     reason: Literal["schedule", "goal", "workload", "other"]
     vetoes: list[list[str]] = []
+    course_id: Optional[str] = None
 
 
 class ChatMessage(BaseModel):
@@ -148,6 +170,7 @@ class MatchRequest(BaseModel):
             team_size_max=4,
         )
     )
+    course_id: Optional[str] = None
     cohort_size: int = Field(16, ge=4, le=40)
 
 
@@ -155,3 +178,46 @@ class MatchResponse(BaseModel):
     team: list[PublicTeammate]
     rationale: str
     cohort_size: int
+    shared_windows: list[str] = []
+    team_goal: str = ""
+    coverage: list[str] = []
+    thin: list[str] = []
+    course_id: str = ""
+    course_name: str = ""
+
+
+class CreateCourseRequest(BaseModel):
+    name: str
+    grading_notes: Optional[str] = ""
+    team_size_min: int = 3
+    team_size_max: int = 4
+
+
+class CourseListResponse(BaseModel):
+    courses: list[Course]
+
+
+class ProfileLookupResponse(BaseModel):
+    profile: Optional[StructuredProfile] = None
+    match: Optional[MatchResponse] = None
+
+
+class ConcernRequest(BaseModel):
+    name: str
+    course_id: str
+    reason: Literal["schedule", "goal", "workload", "other"]
+    note: Optional[str] = ""
+
+
+class ConcernRecord(BaseModel):
+    name: str
+    course_id: str
+    reason: Literal["schedule", "goal", "workload", "other"]
+    note: str = ""
+
+
+class RosterResponse(BaseModel):
+    profiles: list[StructuredProfile]
+    concerns: dict[str, ConcernRecord] = {}
+    course: Course
+    assignment: Optional[OptimizeResponse] = None

@@ -1,26 +1,22 @@
 :root {
-  /* CMU brand core — brand.cmu.edu */
-  --cmu-red: #c41230;
-  --cmu-red-dark: #940b20;
-  --iron-gray: #6d6e71;
-  --steel-gray: #e0e0e0;
-  --black: #000000;
-  --white: #ffffff;
+  --ink: #2b221b;
+  --muted: #8a7b6e;
+  --line: #eadfd3;
+  --paper: #fffdf9;
+  --bg: #f6efe6;
+  --accent: #c56a3a;
+  --accent-strong: #9d4e28;
+  --accent-soft: #f6e6d6;
+  --peach: #f0c3a0;
+  --sand: #e8d3b5;
+  --coral: #e07a5f;
+  --clay: #c9845a;
+  --good: #3d7a4a;
+  --warn: #b45309;
+  --warn-soft: #f3e0c8;
 
-  --bg: var(--white);
-  --surface: var(--white);
-  --surface-alt: #f7f7f7;
-  --border: var(--steel-gray);
-  --text: var(--black);
-  --text-secondary: var(--iron-gray);
-  --accent: var(--cmu-red);
-  --accent-strong: var(--cmu-red-dark);
-  --accent-soft: #f8e6e9;
-  --good: #0e7a3d;
-  --good-soft: #e7f5ec;
-
-  --font-display: "Source Serif Pro", Georgia, "Times New Roman", serif;
-  --font-ui: "Open Sans", Helvetica, Arial, sans-serif;
+  --font: "DM Sans", "Segoe UI", Helvetica, Arial, sans-serif;
+  --shadow: 0 18px 50px rgba(80, 50, 20, 0.07);
 }
 
 * {
@@ -36,8 +32,8 @@ body,
 body {
   margin: 0;
   background: var(--bg);
-  color: var(--text);
-  font-family: var(--font-ui);
+  color: var(--ink);
+  font-family: var(--font);
   font-size: 16px;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
@@ -46,7 +42,9 @@ body {
 h1,
 h2,
 h3 {
-  font-family: var(--font-display);
+  font-family: var(--font);
+  font-weight: 650;
+  letter-spacing: -0.03em;
   text-wrap: balance;
   margin: 0;
 }

@@ -128,128 +128,139 @@ def generate_rationale(member_names: list[str], breakdown: dict, dominant_goal_l
     return response.choices[0].message.content.strip()
 
 
-CHAT_RESPONSE_SCHEMA = {
-    "name": "crewfit_chat_turn",
-    "schema": {
-        "type": "object",
-        "properties": {
-            "reply": {"type": "string"},
-            "ready": {"type": "boolean"},
-            "profile": {
-                "anyOf": [
-                    {"type": "null"},
-                    {
-                        "type": "object",
-                        "properties": {
-                            "goal": {"type": "string", "enum": ["pass", "grade_A", "research", "deep_mastery"]},
-                            "availability": {
-                                "type": "array",
-                                "items": {"type": "string", "enum": _SLOT_ENUM},
-                            },
-                            "skills": {
-                                "type": "object",
-                                "properties": {
-                                    "technical": {"type": "integer", "minimum": 1, "maximum": 5},
-                                    "writing": {"type": "integer", "minimum": 1, "maximum": 5},
-                                    "analysis": {"type": "integer", "minimum": 1, "maximum": 5},
-                                    "presentation": {"type": "integer", "minimum": 1, "maximum": 5},
-                                },
-                                "required": ["technical", "writing", "analysis", "presentation"],
-                            },
-                            "hours": {"type": "integer", "minimum": 1, "maximum": 40},
-                            "role": {"type": "string", "enum": ["lead", "contributor", "either"]},
-                            "conflict_mode": {
-                                "type": "string",
-                                "enum": ["vote", "rotate_lead", "escalate", "defer_to_invested"],
-                            },
-                            "confidence": {"type": "number", "minimum": 0, "maximum": 1},
-                        },
-                        "required": [
-                            "goal",
-                            "availability",
-                            "skills",
-                            "hours",
-                            "role",
-                            "conflict_mode",
-                            "confidence",
-                        ],
-                    },
-                ]
-            },
-        },
-        "required": ["reply", "ready", "profile"],
-    },
-}
+_SKILL_KEYS = ("technical", "writing", "analysis", "presentation")
+_SKILL_REASK = (
+    "How would you rate your technical skills, from 1 to 5?",
+    "How would you rate your writing, from 1 to 5?",
+    "How would you rate your analysis skills, from 1 to 5?",
+    "How would you rate your presenting, from 1 to 5?",
+)
+
+
+_ROLE_QUESTION = (
+    "On a team, would you rather lead, contribute, or are you fine with either?"
+)
+_ROLE_REASK = (
+    "Please pick one: lead, contribute, or either."
+)
 
 
 def chat_turn(name: str, messages: list[dict], course_context: str) -> dict:
     """One conversational turn for the student-facing personality interview.
 
-    Returns {reply, ready, profile?} where profile is set only when ready=True.
+    Questions are scripted so every category is asked. Extraction (Grok or
+    heuristic) only runs after the last answer — the matcher is unchanged.
     """
-    if _client is None:
-        return _heuristic_chat(name, messages)
-
-    history = [{"role": m["role"], "content": m["content"]} for m in messages]
-    system = {
-        "role": "system",
-        "content": (
-            f"You are CrewFit for {name} ({course_context or 'a group project'}). "
-            "Keep this SHORT — max 2 questions total across the whole chat. "
-            "Up front, list exactly what you need in one tight reply: "
-            "(1) goal: pass / grade A / research / deep mastery; "
-            "(2) concrete free windows as day + time — Mon–Sun × morning 9–12 / afternoon 12–5 / evening 5–9 "
-            "(emit slots like mon_evening, sat_afternoon); "
-            "(3) hours/week; "
-            "(4) skill ratings 1–5 for: Technical (coding/building), Writing (docs/reports), "
-            "Analysis (data/research), Presentation (demos/pitching). "
-            "Default role=either and conflict_mode=vote unless they volunteer otherwise. "
-            "If their first answer covers enough, set ready=true with the full profile immediately. "
-            "Otherwise ask ONE clarifying question only. Never ask about vague 'skills' without naming the four."
-        ),
-    }
-
-    response = _client.chat.completions.create(
-        model=XAI_MODEL,
-        messages=[system, *history],
-        response_format={"type": "json_schema", "json_schema": CHAT_RESPONSE_SCHEMA},
-        temperature=0.5,
-    )
-    data = json.loads(response.choices[0].message.content)
-    if not data.get("ready"):
-        data["profile"] = None
-    elif data.get("profile"):
-        data["profile"] = normalize_availability_in_profile(data["profile"])
-    return data
-
-
-def _heuristic_chat(name: str, messages: list[dict]) -> dict:
-    """One-shot scripted open + ready on the next user reply."""
     user_turns = [m["content"] for m in messages if m["role"] == "user"]
+    script = _interview_script(name)
 
-    if len(user_turns) == 0:
-        return {
-            "reply": (
-                f"Hi {name} — I only need four things (about a minute):\n"
-                "1) Goal: pass / grade A / research / deep mastery\n"
-                "2) Free windows: which days (Mon–Sun) × morning 9–12 / afternoon 12–5 / evening 5–9\n"
-                "3) Hours per week\n"
-                "4) Rate 1–5: Technical (coding/building), Writing (docs/reports), "
-                "Analysis (data/research), Presentation (demos/pitching)\n"
-                "Reply in one message and I’ll match you."
-            ),
-            "ready": False,
-            "profile": None,
-        }
+    if len(user_turns) < 3:
+        return {"reply": script[len(user_turns)], "ready": False, "profile": None}
 
-    joined = " ".join(user_turns)
-    extracted = _heuristic_extract(joined)
+    ratings: list[int] = []
+    team_role: str | None = None
+    last_invalid_skill = False
+    last_invalid_role = False
+    for reply in user_turns[3:]:
+        if len(ratings) < 4:
+            parsed = _parse_skill_rating(reply)
+            if parsed is None:
+                last_invalid_skill = True
+                continue
+            ratings.append(parsed)
+            last_invalid_skill = False
+            continue
+        parsed_role = _parse_team_role(reply)
+        if parsed_role is None:
+            last_invalid_role = True
+            continue
+        team_role = parsed_role
+        last_invalid_role = False
+        break
+
+    if len(ratings) < 4:
+        nxt = _SKILL_REASK[len(ratings)]
+        if last_invalid_skill:
+            reply = (
+                "That needs to be a whole number from 1 to 5 — 6 or anything outside "
+                f"that range doesn’t count. {nxt}"
+            )
+        else:
+            reply = script[3 + len(ratings)]
+        return {"reply": reply, "ready": False, "profile": None}
+
+    if team_role is None:
+        reply = _ROLE_REASK if last_invalid_role else _ROLE_QUESTION
+        return {"reply": reply, "ready": False, "profile": None}
+
+    early = " ".join(user_turns[:3])
+    if _client is not None:
+        extracted = extract_profile(name, early, course_context)
+    else:
+        extracted = _heuristic_extract(early)
+
     extracted.pop("clarifying_questions", None)
+    extracted["skills"] = {key: ratings[i] for i, key in enumerate(_SKILL_KEYS)}
+    extracted["role"] = team_role
+    extracted["conflict_mode"] = "vote"
+    extracted = normalize_availability_in_profile(extracted)
     return {
-        "reply": f"Thanks {name} — that’s enough. Hit Find my team when you’re ready.",
+        "reply": f"Thanks {name} — that’s everything we need. Find your team whenever you’re ready.",
         "ready": True,
         "profile": extracted,
     }
+
+
+def _interview_script(name: str) -> list[str]:
+    return [
+        (
+            f"Hey {name} — a few easy questions so we can put you with people who want "
+            "a similar outcome. To start: what would make this project feel successful "
+            "for you? Some people just want to finish it, others want a strong grade, "
+            "a research angle, or to really learn the material."
+        ),
+        "Got it. Roughly how many hours a week can you actually put into this?",
+        (
+            "When are you usually free to meet — which days work, "
+            "and is that mornings, afternoons, or evenings?"
+        ),
+        (
+            "Next, four quick ratings so we can balance the team — just a number from 1 to 5, "
+            "where 1 is not your thing and 5 is a real strength. "
+            "First: how would you rate your technical skills?"
+        ),
+        "How would you rate your writing, from 1 to 5?",
+        "How would you rate your analysis skills, from 1 to 5?",
+        "How would you rate your presenting, from 1 to 5?",
+    ]
+
+
+def _parse_skill_rating(text: str) -> int | None:
+    """Accept only an explicit 1–5. Out-of-range values like 6 are rejected."""
+    nums = [int(n) for n in re.findall(r"\d+", text or "")]
+    if not nums:
+        return None
+    if any(n < 1 or n > 5 for n in nums):
+        return None
+    in_range = [n for n in nums if 1 <= n <= 5]
+    if len(in_range) != 1:
+        return None
+    return in_range[0]
+
+
+def _parse_team_role(text: str) -> str | None:
+    t = (text or "").lower()
+    if re.search(
+        r"\beither\b|no preference|don't mind|do not mind|fine with (?:either|both)|"
+        r"\bwhatever\b|flexible|either way",
+        t,
+    ):
+        return "either"
+    if re.search(r"\bcontribut|\bsupport", t):
+        return "contributor"
+    if re.search(r"\blead", t):
+        return "lead"
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -314,24 +325,29 @@ def _heuristic_extract(bio: str) -> dict:
         availability = normalize_availability(coarse or ["weekday_evening"])
 
     skills = {"technical": 3, "writing": 3, "analysis": 3, "presentation": 3}
-    if re.search(r"frontend|\bui\b|design|backend|algorithm|coding|programming", text):
-        skills["technical"] = 5
-    if re.search(r"writing|writer", text):
-        skills["writing"] = 5
+    weak_near = r"(?:weak|hate|avoid|rather not|don't like|do not like|not good|rather leave|leave)\b.{0,28}"
+
+    if re.search(r"frontend|\bui\b|design|backend|algorithm|coding|programming|build(?:ing)?|\bcode\b", text):
+        skills["technical"] = 1 if re.search(weak_near + r"(?:cod|tech|program|front|back|build)", text) else 5
+    if re.search(r"writing|writer|docs|reports?", text):
+        skills["writing"] = 1 if re.search(weak_near + r"writ", text) else 5
     if re.search(r"stats|statistics|data analysis|\banalysis\b|analytic", text):
-        skills["analysis"] = 5
-    if re.search(r"presenting|presentation|public speak", text):
-        skills["presentation"] = 5
-    weak_match = re.search(r"weak (?:at|on|in) (\w+)", text)
+        skills["analysis"] = 1 if re.search(weak_near + r"(?:stat|analy)", text) else 5
+    if re.search(r"presenting|presentation|public speak|pitch(?:ing)?|demos?", text):
+        skills["presentation"] = 1 if re.search(weak_near + r"(?:present|speak|pitch|demo)", text) else 5
+    weak_match = re.search(
+        r"(?:weak|hate|avoid|rather not|don't like|do not like|not good|rather leave)(?:\s+(?:at|on|in|doing|owning))?\s+(\w+)",
+        text,
+    )
     if weak_match:
         kw = weak_match.group(1)
         if re.search(r"stat|analy", kw):
             skills["analysis"] = 1
         elif re.search(r"writ", kw):
             skills["writing"] = 1
-        elif re.search(r"present|speak", kw):
+        elif re.search(r"present|speak|pitch|demo", kw):
             skills["presentation"] = 1
-        elif re.search(r"cod|tech|program|front|back", kw):
+        elif re.search(r"cod|tech|program|front|back|build", kw):
             skills["technical"] = 1
 
     role = "either"
