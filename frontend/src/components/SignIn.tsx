@@ -63,7 +63,7 @@ export default function SignIn({ onSignIn, banner }: Props) {
           <span className="mark">C.</span>
           <p className="kicker">HackCMU 2026</p>
           <h1>CrewFit</h1>
-          <p className="page-dek">Teams that actually work together — matched on hours, goals, and how people like to ship.</p>
+          <p className="page-dek">Teams that actually work together, matched on hours, goals, and how people like to ship.</p>
           <ul className="signin-points">
             <li>Students chat once, then reuse the same working style.</li>
             <li>Teachers see flags, rematches, and preference changes live.</li>

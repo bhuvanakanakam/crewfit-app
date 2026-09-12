@@ -6,12 +6,21 @@ from datetime import datetime, timezone
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 
 from .analysis import random_baseline_score, reoptimize_for_flag, team_stats
 from .config import CORS_ORIGINS
 from .db import load_snapshot, save_snapshot
 from .facts import team_facts
-from .grok_client import chat_turn, extract_profile, resolve_clarification, update_turn
+from .grok_client import (
+    apply_voice_snapshot,
+    chat_turn,
+    create_voice_session,
+    extract_profile,
+    resolve_clarification,
+    synthesize_speech,
+    update_turn,
+)
 from .models import (
     Account,
     ChatRequest,
@@ -42,11 +51,16 @@ from .models import (
     RematchPermissionRequest,
     ResolveConcernRequest,
     RosterResponse,
+    SpeakRequest,
     StaffRequest,
     StructuredProfile,
     SubmitResponse,
     TeamMember,
     TeamResult,
+    VoiceRecordRequest,
+    VoiceRecordResponse,
+    VoiceSessionRequest,
+    VoiceSessionResponse,
 )
 from .solver import solve_teams
 from .synthetic import generate_cohort
@@ -64,7 +78,7 @@ app.add_middleware(
 
 # People persist across courses. Enrollments, matches, and the official
 # assignment are per-course. Student "your team" and the teacher Teams tab
-# read the same solve — they used to run two independent solvers.
+# read the same solve, they used to run two independent solvers.
 _people: dict[str, StructuredProfile] = {}
 _courses: dict[str, Course] = {}
 _enroll: dict[str, set[str]] = {}
@@ -692,8 +706,8 @@ def _apply_pref_to_team(course: Course, stored: StructuredProfile) -> PrefImpact
         _concerns[_match_key(course.id, stored.name)] = rec
         message = (
             f"This update lowered your team's fit by {abs(delta_pct):.0f}%. "
-            "Your teacher was notified. Teammates can still work with you — "
-            "the team stays unless a rematch is approved."
+            "Your teacher was notified. Teammates can still work with you. "
+            "The team stays unless a rematch is approved."
         )
         teacher_title = f"{stored.name} is affecting their team"
         teacher_body = note
@@ -820,15 +834,15 @@ def cohort(
     count: int = Query(16, ge=4, le=40),
     seed: int | None = Query(7),
 ):
-    """Sample class with full profile fields — organizer/demo only."""
+    """Sample class with full profile fields, organizer/demo only."""
     return ParseResponse(profiles=generate_cohort(exclude_name="", count=count, seed=seed))
 
 
 @app.post("/api/chat", response_model=ChatResponse)
 def chat(req: ChatRequest):
-    """Student personality interview with Grok — one turn at a time."""
+    """Student personality interview with Grok, one turn at a time."""
     name = req.name.strip() or "there"
-    course_context = f"{req.course.name} — {req.course.grading_notes}".strip(" —")
+    course_context = f"{req.course.name}: {req.course.grading_notes}".strip(" :")
     messages = [{"role": m.role, "content": m.content} for m in req.messages]
     if req.mode == "update" and req.profile is not None:
         raw = update_turn(name, messages, course_context, req.profile.model_dump(), req.focus)
@@ -850,10 +864,72 @@ def chat(req: ChatRequest):
             role=p["role"],
             conflict_mode=p.get("conflict_mode", "vote"),
             confidence=float(p.get("confidence", 0.85)),
-            clarifying_questions=[],
+            clarifying_questions=list(p.get("clarifying_questions") or raw.get("notes") or []),
         )
 
-    return ChatResponse(reply=raw["reply"], ready=bool(raw.get("ready") and profile), profile=profile)
+    ready = bool(raw.get("ready") and profile)
+    return ChatResponse(
+        reply=raw["reply"],
+        ready=ready,
+        profile=profile,
+        needs_confirm=ready,
+        notes=list(raw.get("notes") or []),
+    )
+
+
+@app.post("/api/voice/session", response_model=VoiceSessionResponse)
+def voice_session(req: VoiceSessionRequest):
+    """Mint a short-lived Grok Voice token for the browser. The xAI key stays on the server."""
+    name = req.name.strip() or "there"
+    course_context = f"{req.course.name}: {req.course.grading_notes}".strip(" :")
+    review = req.profile.model_dump() if req.profile else None
+    try:
+        return VoiceSessionResponse(**create_voice_session(name, course_context, review))
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Couldn't start a voice session ({e}).") from e
+
+
+@app.post("/api/voice/record", response_model=VoiceRecordResponse)
+def voice_record(req: VoiceRecordRequest):
+    name = req.name.strip() or "there"
+    raw = apply_voice_snapshot(name, req.snapshot or {})
+    profile = None
+    if raw.get("ready") and raw.get("profile"):
+        p = raw["profile"]
+        profile = StructuredProfile(
+            id="you",
+            name=name,
+            bio="Shared over voice",
+            goal=p["goal"],
+            availability=p["availability"],
+            skills=p["skills"],
+            hours=p["hours"],
+            role=p["role"],
+            conflict_mode=p.get("conflict_mode", "vote"),
+            confidence=float(p.get("confidence", 0.85)),
+            clarifying_questions=list(p.get("clarifying_questions") or raw.get("notes") or []),
+        )
+    return VoiceRecordResponse(
+        accepted=True,
+        ready=bool(raw.get("ready") and profile),
+        profile=profile,
+        notes=list(raw.get("notes") or []),
+        missing=list(raw.get("missing") or []),
+        recap=raw.get("recap") or "",
+    )
+
+
+@app.post("/api/speak")
+def speak(req: SpeakRequest):
+    try:
+        audio, content_type = synthesize_speech(req.text, req.voice_id or "rex")
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Couldn't speak that ({e}).") from e
+    return Response(content=audio, media_type=content_type)
 
 
 @app.post("/api/match", response_model=MatchResponse)
@@ -1060,7 +1136,7 @@ def set_rematch_permission(req: RematchPermissionRequest):
 
 @app.post("/api/parse", response_model=ParseResponse)
 def parse(req: ParseRequest):
-    course_context = f"{req.course.name} — {req.course.grading_notes}".strip(" —")
+    course_context = f"{req.course.name}: {req.course.grading_notes}".strip(" :")
     profiles = []
     for idx, person in enumerate(req.people):
         raw = extract_profile(person.name, person.bio, course_context)
@@ -1077,7 +1153,7 @@ def parse(req: ParseRequest):
 
 @app.post("/api/clarify", response_model=ParseResponse)
 def clarify(req: ClarifyRequest):
-    course_context = f"{req.course.name} — {req.course.grading_notes}".strip(" —")
+    course_context = f"{req.course.name}: {req.course.grading_notes}".strip(" :")
     answers_by_profile: dict[str, list[tuple[str, str]]] = {}
     for a in req.answers:
         answers_by_profile.setdefault(a.profile_id, []).append((a.question, a.answer))

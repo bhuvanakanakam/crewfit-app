@@ -1,6 +1,6 @@
 """
 The optimizer. Formulates team assignment as an integer program and solves it
-with OR-Tools CP-SAT — this is the "Optimization track" core of the project.
+with OR-Tools CP-SAT, this is the "Optimization track" core of the project.
 
 Model:
   x[i, t]      = 1 if person i is assigned to team t
@@ -198,8 +198,8 @@ def solve_teams_detailed(
 
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
         raise RuntimeError(
-            "No feasible team assignment exists under the current constraints — "
-            "usually means a veto or availability gap makes some team impossible to fill. "
+            "No feasible team assignment exists under the current constraints. This usually "
+            "means a veto or availability gap makes some team impossible to fill. "
             "Try relaxing team size bounds or reviewing vetoes."
         )
 

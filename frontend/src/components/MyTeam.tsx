@@ -73,7 +73,7 @@ export default function MyTeam({
       <div className="page-head">
         <p className="kicker">{course.name}</p>
         <h1>Your team</h1>
-        <p className="page-dek">Names and shared facts only — preferences stay private.</p>
+        <p className="page-dek">Names and shared facts only. Preferences stay private.</p>
       </div>
 
       {impactNote && (
@@ -100,7 +100,7 @@ export default function MyTeam({
         {(result.shared_windows ?? []).length > 0 ? (
           <AvailCalendar slots={result.shared_windows} />
         ) : (
-          <p className="pref-empty">None fully overlap — plan to work asynchronously.</p>
+          <p className="pref-empty">None fully overlap. Plan to work asynchronously.</p>
         )}
       </div>
 
@@ -146,7 +146,7 @@ export default function MyTeam({
 
         {flagOpen && flagState !== "sent" && (
           <div className="flag-box">
-            <p className="field-help">This goes to your teacher for this course — teammates don’t see it.</p>
+            <p className="field-help">This goes to your teacher for this course. Teammates don’t see it.</p>
             <div className="chip-grid">
               {FLAG_REASONS.map((r) => (
                 <button

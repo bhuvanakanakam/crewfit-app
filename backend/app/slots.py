@@ -19,6 +19,22 @@ DAY_LABEL = {
     "sun": "Sun",
 }
 
+DAY_SPOKEN = {
+    "mon": "Monday",
+    "tue": "Tuesday",
+    "wed": "Wednesday",
+    "thu": "Thursday",
+    "fri": "Friday",
+    "sat": "Saturday",
+    "sun": "Sunday",
+}
+
+TIME_SPOKEN = {
+    "morning": "mornings",
+    "afternoon": "afternoons",
+    "evening": "evenings",
+}
+
 TIME_LABEL = {
     "morning": "Morning (9am–12pm)",
     "afternoon": "Afternoon (12–5pm)",
@@ -54,3 +70,22 @@ def normalize_availability(slots: list[str], *, fill_default: bool = True) -> li
     if ordered:
         return ordered
     return ["wed_evening"] if fill_default else []
+
+
+def spoken_slot(slot: str) -> str:
+    parts = slot.strip().lower().replace(" ", "_").split("_")
+    if len(parts) != 2:
+        return slot.replace("_", " ")
+    day, time = parts
+    return f"{DAY_SPOKEN.get(day, day)} {TIME_SPOKEN.get(time, time)}"
+
+
+def spoken_slots(slots: list[str]) -> str:
+    labels = [spoken_slot(s) for s in slots]
+    if not labels:
+        return ""
+    if len(labels) == 1:
+        return labels[0]
+    if len(labels) == 2:
+        return f"{labels[0]} and {labels[1]}"
+    return ", ".join(labels[:-1]) + f", and {labels[-1]}"

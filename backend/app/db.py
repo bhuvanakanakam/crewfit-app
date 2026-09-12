@@ -3,7 +3,7 @@
 Local default is SQLite (`backend/crewfit.db`). For deploy, set DATABASE_URL to a
 Neon/Vercel Postgres URL (`postgres://` or `postgresql://`). The React app still
 belongs on Vercel; this FastAPI process should run as a long-lived service
-(Railway, Render, Fly) pointed at the same database — Vercel’s filesystem is
+(Railway, Render, Fly) pointed at the same database. Vercel’s filesystem is
 ephemeral, so the database is the source of truth.
 """
 

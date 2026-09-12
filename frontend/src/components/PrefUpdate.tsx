@@ -2,6 +2,7 @@ import { useRef, useState, type KeyboardEvent } from "react";
 import { sendChat } from "../api";
 import {
   GOAL_OPTIONS,
+  INTERVIEWER_NAME,
   ROLE_LABELS,
   SKILL_FIELDS,
   toCourseContext,
@@ -135,7 +136,7 @@ export default function PrefUpdate({ name, course, profile, onSave, onCancel }: 
                 {
                   role: "assistant",
                   content:
-                    "Tell me what to change in your own words. I’ll update only what you mean — if it’s unclear I’ll ask once.",
+                    "Tell me what to change in your own words. I’ll update only what you mean. If it’s unclear I’ll ask once.",
                 },
               ]);
             }
@@ -227,13 +228,13 @@ export default function PrefUpdate({ name, course, profile, onSave, onCancel }: 
           <div className="chat-thread" role="log" aria-live="polite">
             {messages.map((m, i) => (
               <div key={`${m.role}-${i}`} className={`bubble ${m.role}`}>
-                <span className="bubble-who">{m.role === "assistant" ? "Assistant" : name}</span>
+                <span className="bubble-who">{m.role === "assistant" ? INTERVIEWER_NAME : name}</span>
                 <ChatBody text={m.content} />
               </div>
             ))}
             {busy && (
               <div className="bubble assistant">
-                <span className="bubble-who">Assistant</span>
+                <span className="bubble-who">{INTERVIEWER_NAME}</span>
                 <p className="typing">Thinking…</p>
               </div>
             )}

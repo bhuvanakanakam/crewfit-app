@@ -1,6 +1,6 @@
 """
 The compatibility model. This is the part of the system that stays entirely
-yours — no LLM call happens in this file. Grok only touches the steps before
+yours, no LLM call happens in this file. Grok only touches the steps before
 (extraction) and after (rationale wording); this scoring function is what the
 solver actually optimizes.
 """
@@ -52,13 +52,13 @@ HARD_CONFLICT_PENALTY = -1.5  # no overlapping availability: heavily discouraged
 
 
 def pair_score(a, b, vetoes: set):
-    """Returns None only for an explicit organizer veto — that's the one true
+    """Returns None only for an explicit organizer veto, that's the one true
     hard constraint the solver enforces structurally.
 
     Zero availability overlap does NOT return None: it returns a heavily
     penalized score with hard_conflict=True. Treating it as a hard model
     constraint (as an earlier version of this did) can make the whole
-    assignment infeasible on small/unlucky rosters — e.g. two weekend-only
+    assignment infeasible on small/unlucky rosters, e.g. two weekend-only
     people who share no evening slot with anyone else. A steep penalty keeps
     the solver always feasible while still avoiding these pairings whenever
     any workable alternative exists."""

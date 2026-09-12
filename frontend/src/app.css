@@ -460,10 +460,18 @@ h1 {
   opacity: 0.7;
 }
 
+.chat-wrap {
+  width: 100%;
+  max-width: 680px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
 .signin,
 .course-picker,
 .saved-style,
-.chat-wrap,
 .match-panel {
   display: flex;
   flex-direction: column;
@@ -640,14 +648,19 @@ h1 {
   border: 1px solid var(--line);
   background: var(--paper);
   border-radius: 16px;
-  overflow: hidden;
+  overflow: visible;
   box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+  min-height: min(72vh, 760px);
 }
 
 .chat-thread {
-  min-height: 340px;
-  max-height: 520px;
+  flex: 1 1 auto;
+  min-height: 220px;
+  max-height: min(48vh, 480px);
   overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 18px;
   display: flex;
   flex-direction: column;
@@ -703,11 +716,106 @@ h1 {
 
 .chat-composer {
   display: grid;
-  grid-template-columns: 1fr auto;
+  grid-template-columns: 1fr;
   gap: 10px;
   padding: 12px 14px;
   border-top: 1px solid var(--line);
-  align-items: end;
+  background: var(--paper);
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+}
+
+.chat-composer textarea {
+  max-width: none;
+}
+
+.composer-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.voice-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 650;
+  color: var(--muted);
+  user-select: none;
+}
+
+.voice-switch input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.voice-switch-track {
+  width: 42px;
+  height: 24px;
+  border-radius: 999px;
+  background: var(--line);
+  position: relative;
+  transition: background 0.15s ease;
+}
+
+.voice-switch-track::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+  transition: transform 0.15s ease;
+}
+
+.voice-switch.on {
+  color: var(--accent-strong);
+}
+
+.voice-switch.on .voice-switch-track {
+  background: var(--accent);
+}
+
+.voice-switch.on .voice-switch-track::after {
+  transform: translateX(18px);
+}
+
+.voice-switch:has(input:disabled) {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.talk-live {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--accent-strong);
+}
+
+.bubble.live {
+  opacity: 0.78;
+}
+
+.bubble.live p {
+  margin: 0;
+  font-style: italic;
+}
+
+.review-notes {
+  margin: 0 0 12px;
+  padding-left: 18px;
+  color: var(--muted);
+  font-size: 13px;
 }
 
 .chat-error {

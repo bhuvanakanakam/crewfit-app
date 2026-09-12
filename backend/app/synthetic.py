@@ -1,4 +1,4 @@
-"""Synthetic cohort generation with Faker — fills the rest of the class so a
+"""Synthetic cohort generation with Faker, fills the rest of the class so a
 single student can demo the match flow without uploading a real roster."""
 
 from __future__ import annotations
@@ -41,7 +41,7 @@ def generate_cohort(
         used_names.add(name.lower())
 
         goal = random.choices(GOALS, weights=GOAL_WEIGHTS, k=1)[0]
-        # 3–6 concrete day×time windows — mirrors how students actually block time.
+        # 3–6 concrete day×time windows, mirrors how students actually block time.
         n_slots = random.choice([3, 4, 5, 6])
         availability = sorted(random.sample(list(ALL_SLOTS), k=n_slots))
         hours = {

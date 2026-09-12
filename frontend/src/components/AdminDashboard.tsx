@@ -260,7 +260,7 @@ export default function AdminDashboard({ course, actor, canManageStaff, focusNam
               {concernFor(selected) && (
                 <p className="violations">
                   {FLAG_REASON_LABELS[concernFor(selected)!.reason]}
-                  {concernFor(selected)?.note ? ` — ${concernFor(selected)?.note}` : ""}
+                  {concernFor(selected)?.note ? `: ${concernFor(selected)?.note}` : ""}
                   {concernFor(selected)?.status && concernFor(selected)?.status !== "open"
                     ? ` · ${concernFor(selected)?.status}`
                     : ""}
