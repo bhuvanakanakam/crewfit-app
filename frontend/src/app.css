@@ -176,10 +176,46 @@ h1 {
   margin-right: auto;
 }
 
-.signin-card .btn.primary.wide {
+.signin-card .btn.wide {
   width: 100%;
   max-width: none;
+}
+
+.signin-card .btn.primary.wide {
   margin-top: 8px;
+}
+
+.signin-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.signin-note,
+.signin-error {
+  font-size: 13px;
+  line-height: 1.45;
+  text-align: center;
+  margin: 0 0 14px;
+}
+
+.signin-note {
+  color: var(--muted);
+}
+
+.signin-error {
+  color: var(--warn);
+}
+
+.signin-note code {
+  font-size: 12px;
+}
+
+.header-avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  object-fit: cover;
 }
 
 .signin-card .role-toggle button {

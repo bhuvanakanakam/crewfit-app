@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import "./app.css";
 import AdminDashboard from "./components/AdminDashboard";
 import ChatInterview from "./components/ChatInterview";
@@ -7,8 +7,11 @@ import MyTeam from "./components/MyTeam";
 import SavedStyle from "./components/SavedStyle";
 import SignIn from "./components/SignIn";
 import { findMatch, listCourses, lookupProfile, submitProfile } from "./api";
+import { useCrewAuth } from "./auth";
+import { displayNameFromUser } from "./authConfig";
 import {
   clearSession,
+  consumePendingRole,
   loadProfile,
   loadSession,
   profileFor,
@@ -23,6 +26,7 @@ import { toCourseContext, type Course, type MatchResponse, type StructuredProfil
 type StudentView = "intake" | "saved" | "matching" | "team";
 
 export default function App() {
+  const auth = useCrewAuth();
   const [session, setSession] = useState<Session | null>(() => loadSession());
   const [course, setCourse] = useState<Course | null>(null);
   const [courseReady, setCourseReady] = useState(() => !loadSession()?.courseId);
@@ -33,6 +37,7 @@ export default function App() {
   const [match, setMatch] = useState<MatchResponse | null>(null);
   const [studentView, setStudentView] = useState<StudentView>("intake");
   const [error, setError] = useState<string | null>(null);
+  const signingOut = useRef(false);
 
   useEffect(() => {
     if (!session?.courseId) {
@@ -47,6 +52,31 @@ export default function App() {
       .catch(() => setCourse(null))
       .finally(() => setCourseReady(true));
   }, [session?.courseId]);
+
+  useEffect(() => {
+    if (!auth.configured || auth.isLoading || signingOut.current) return;
+    if (!auth.isAuthenticated || !auth.user) {
+      if (!session) return;
+      clearSession();
+      setSession(null);
+      setCourse(null);
+      setMatch(null);
+      return;
+    }
+    const name = displayNameFromUser(auth.user);
+    if (session?.name === name) return;
+    const existing = loadSession();
+    const role = consumePendingRole() ?? existing?.role ?? session?.role ?? "student";
+    const next: Session = { name, role, courseId: null };
+    saveSession(next);
+    setSession(next);
+    setCourse(null);
+    setMatch(null);
+    setError(null);
+    const mine = profileFor(name);
+    setProfile(mine);
+    setStudentView(mine ? "saved" : "intake");
+  }, [auth.configured, auth.isLoading, auth.isAuthenticated, auth.user, session]);
 
   useEffect(() => {
     if (!session || session.role !== "student" || !course) return;
@@ -101,11 +131,17 @@ export default function App() {
   }
 
   function signOut() {
+    signingOut.current = true;
     clearSession();
     setSession(null);
     setCourse(null);
     setMatch(null);
     setError(null);
+    if (auth.configured) {
+      auth.logout();
+      return;
+    }
+    signingOut.current = false;
   }
 
   function changeCourse() {
@@ -136,7 +172,12 @@ export default function App() {
     }
   }
 
-  const signedIn = Boolean(session);
+  const waitingOnAuth = auth.configured && auth.isLoading;
+  const signedIn = waitingOnAuth
+    ? false
+    : auth.configured
+      ? Boolean(auth.isAuthenticated && session)
+      : Boolean(session);
   const inCourse = Boolean(session && course);
 
   return (
@@ -167,6 +208,9 @@ export default function App() {
             )}
             {session && (
               <div className="header-you">
+                {auth.user?.picture && (
+                  <img src={auth.user.picture} alt="" className="header-avatar" referrerPolicy="no-referrer" />
+                )}
                 <span>
                   {session.name} · {session.role}
                 </span>

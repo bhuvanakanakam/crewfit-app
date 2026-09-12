@@ -24,6 +24,23 @@ export function loadSession(): Session | null {
   }
 }
 
+const PENDING_ROLE_KEY = "crewfit.pendingRole.v1";
+
+export function savePendingRole(role: Role) {
+  sessionStorage.setItem(PENDING_ROLE_KEY, role);
+}
+
+export function consumePendingRole(): Role | null {
+  try {
+    const raw = sessionStorage.getItem(PENDING_ROLE_KEY);
+    sessionStorage.removeItem(PENDING_ROLE_KEY);
+    if (raw === "student" || raw === "teacher") return raw;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 export function saveSession(session: Session) {
   localStorage.setItem(SESSION_KEY, JSON.stringify(session));
 }
