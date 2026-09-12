@@ -29,7 +29,6 @@ export default function SavedStyle({
   hasTeam,
   rematchAllowed,
   matching,
-  waiting,
 }: Props) {
   const first = profile.name.split(" ")[0] || profile.name;
 
