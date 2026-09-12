@@ -170,7 +170,9 @@ def optimize(req: OptimizeRequest):
     teams = [_to_team_result(f"team-{i}", members, vetoes) for i, members in enumerate(raw_teams)]
 
     optimized_avg = sum(t.score for t in teams) / len(teams) if teams else 0.0
-    baseline_avg = random_baseline_score(req.profiles, vetoes, req.course.team_size_max)
+    baseline_avg = random_baseline_score(
+        req.profiles, vetoes, req.course.team_size_min, req.course.team_size_max
+    )
     improvement_pct = ((optimized_avg - baseline_avg) / abs(baseline_avg) * 100) if baseline_avg else 0.0
 
     return OptimizeResponse(teams=teams, baseline_score=baseline_avg, improvement_pct=improvement_pct)
@@ -202,7 +204,9 @@ def flag(req: FlagRequest):
         for i, members in enumerate(teams_as_people)
     ]
     optimized_avg = sum(t.score for t in teams) / len(teams) if teams else 0.0
-    baseline_avg = random_baseline_score(req.profiles, vetoes, req.course.team_size_max)
+    baseline_avg = random_baseline_score(
+        req.profiles, vetoes, req.course.team_size_min, req.course.team_size_max
+    )
     improvement_pct = ((optimized_avg - baseline_avg) / abs(baseline_avg) * 100) if baseline_avg else 0.0
 
     return OptimizeResponse(
