@@ -1,23 +1,28 @@
 :root {
-  --ink: #2b221b;
-  --muted: #8a7b6e;
-  --line: #eadfd3;
-  --paper: #fffdf9;
-  --bg: #f6efe6;
-  --accent: #c56a3a;
-  --accent-strong: #9d4e28;
-  --accent-soft: #f6e6d6;
-  --peach: #f0c3a0;
-  --sand: #e8d3b5;
-  --coral: #e07a5f;
-  --clay: #c9845a;
-  --good: #3d7a4a;
-  --warn: #b45309;
-  --warn-soft: #f3e0c8;
+  --ink: #10141f;
+  --muted: #6b7289;
+  --line: #d9dde7;
+  --paper: #ffffff;
+  --bg: #f3f5f8;
+  --accent: #b8f000;
+  --accent-strong: #10141f;
+  --accent-soft: #eef8c4;
+  --peach: #d6f56a;
+  --sand: #e6e9f0;
+  --coral: #e11d48;
+  --clay: #334155;
+  --good: #178a4c;
+  --warn: #c2410c;
+  --warn-soft: #ffedd5;
 
-  --font: "Source Sans 3", "Segoe UI", Helvetica, Arial, sans-serif;
-  --font-display: "Fraunces", Georgia, "Times New Roman", serif;
+  --font: "Plus Jakarta Sans", "Segoe UI", Helvetica, Arial, sans-serif;
+  --font-display: "Newsreader", Georgia, "Times New Roman", serif;
   --shadow: 0 18px 50px rgba(80, 50, 20, 0.07);
+  --radius: 18px;
+  --radius-sm: 12px;
+  --radius-pill: 999px;
+  --max-student: 880px;
+  --max-wide: 1100px;
 }
 
 * {

@@ -1,4 +1,4 @@
-import type { MatchResponse, StructuredProfile } from "./types";
+import { isPendingProfile, type MatchResponse, type StructuredProfile } from "./types";
 
 export type Role = "student" | "teacher";
 export type StaffKind = "teacher" | "ta" | "none";
@@ -10,11 +10,12 @@ export interface Session {
   staffKind?: StaffKind;
   canCreateCourse?: boolean;
   local?: boolean;
+  demo?: boolean;
 }
 
-const SESSION_KEY = "crewfit.session.v1";
-const PROFILE_KEY = "crewfit.profile.v1";
-const MATCHES_KEY = "crewfit.matches.v1";
+const SESSION_KEY = "squadly.session.v1";
+const PROFILE_KEY = "squadly.profile.v1";
+const MATCHES_KEY = "squadly.matches.v1";
 
 export function loadSession(): Session | null {
   try {
@@ -28,7 +29,7 @@ export function loadSession(): Session | null {
   }
 }
 
-const PENDING_ROLE_KEY = "crewfit.pendingRole.v1";
+const PENDING_ROLE_KEY = "squadly.pendingRole.v1";
 
 export function savePendingRole(role: Role) {
   sessionStorage.setItem(PENDING_ROLE_KEY, role);
@@ -99,6 +100,6 @@ export function saveMatch(name: string, courseId: string, match: MatchResponse) 
 
 export function profileFor(name: string): StructuredProfile | null {
   const stored = loadProfile();
-  if (!stored) return null;
+  if (!stored || isPendingProfile(stored)) return null;
   return stored.name.trim().toLowerCase() === name.trim().toLowerCase() ? stored : null;
 }

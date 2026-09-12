@@ -19,13 +19,44 @@
 }
 
 .app-header-inner {
-  max-width: 1120px;
+  max-width: var(--max-wide);
   margin: 0 auto;
   padding: 12px 22px;
   display: flex;
   align-items: center;
   gap: 14px;
   flex-wrap: wrap;
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.mark {
+  display: grid;
+  place-items: center;
+  background: linear-gradient(135deg, var(--peach), var(--accent));
+  color: #fffaf4;
+  font-family: var(--font-display);
+  font-weight: 700;
+  letter-spacing: -0.06em;
+  line-height: 1;
+}
+
+.mark.md {
+  width: 56px;
+  height: 56px;
+  border-radius: 18px;
+  font-size: 22px;
+}
+
+.mark.sm {
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  font-size: 13px;
 }
 
 .logo {
@@ -110,13 +141,13 @@
 .app-main {
   flex: 1;
   width: 100%;
-  max-width: 880px;
+  max-width: var(--max-student);
   margin: 0 auto;
   padding: 36px 22px 88px;
 }
 
 .app-main.wide {
-  max-width: 1100px;
+  max-width: var(--max-wide);
   padding-top: 20px;
 }
 
@@ -184,18 +215,7 @@ h1 {
 }
 
 .signin-brand .mark {
-  display: grid;
-  place-items: center;
-  width: 56px;
-  height: 56px;
   margin-bottom: 18px;
-  border-radius: 18px;
-  background: linear-gradient(135deg, var(--peach), var(--accent));
-  color: #fffaf4;
-  font-family: var(--font-display);
-  font-weight: 700;
-  font-size: 22px;
-  letter-spacing: -0.06em;
 }
 
 .signin-brand h1 {
@@ -241,6 +261,10 @@ h1 {
   border-radius: 24px;
   padding: 28px 26px 24px;
   box-shadow: var(--shadow);
+}
+
+.signin-card .need-box {
+  margin: 12px 0 4px;
 }
 
 .signin-card h2 {
@@ -349,7 +373,7 @@ h1 {
   overflow: auto;
   background: var(--paper);
   border: 1px solid var(--line);
-  border-radius: 12px;
+  border-radius: var(--radius);
   box-shadow: var(--shadow);
   z-index: 40;
 }
@@ -600,7 +624,7 @@ h1 {
   border: 1px solid var(--line);
   background: var(--paper);
   padding: 18px 18px 16px;
-  border-radius: 18px;
+  border-radius: var(--radius);
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -630,16 +654,16 @@ h1 {
 
 .new-course {
   margin-top: 8px;
-  padding: 16px;
+  padding: 18px;
   background: var(--paper);
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: var(--radius);
 }
 
 .chat-panel {
   border: 1px solid var(--line);
   background: var(--paper);
-  border-radius: 16px;
+  border-radius: var(--radius);
   overflow: hidden;
   box-shadow: var(--shadow);
 }
@@ -806,7 +830,7 @@ h1 {
   padding: 12px 14px;
   border: 1px solid var(--line);
   background: var(--paper);
-  border-radius: 14px;
+  border-radius: var(--radius);
 }
 
 .teammate-list li.you {
@@ -846,7 +870,7 @@ h1 {
 .fact-grid article {
   background: var(--paper);
   border: 1px solid var(--line);
-  border-radius: 14px;
+  border-radius: var(--radius);
   padding: 14px;
 }
 
@@ -917,8 +941,17 @@ h1 {
 }
 
 .matching-state {
-  padding: 64px 0;
+  padding: 88px 0;
   text-align: center;
+}
+
+.matching-state h1 {
+  font-size: clamp(28px, 4vw, 40px);
+}
+
+.matching-state .page-dek {
+  margin-left: auto;
+  margin-right: auto;
 }
 
 .matching-state .pulse {
@@ -993,7 +1026,7 @@ h1 {
   overflow-x: auto;
   border: 1px solid var(--line);
   background: var(--paper);
-  border-radius: 14px;
+  border-radius: var(--radius);
 }
 
 .roster-table {
@@ -1034,7 +1067,7 @@ h1 {
   border: 1px solid var(--line);
   padding: 16px 18px;
   background: var(--paper);
-  border-radius: 14px;
+  border-radius: var(--radius);
 }
 
 .student-detail h2 {
@@ -1108,7 +1141,7 @@ h1 {
   border: 1px solid var(--line);
   padding: 14px 16px;
   margin-bottom: 16px;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
 }
 
 .need-box.warn-box {
@@ -1125,9 +1158,10 @@ h1 {
 
 .team-card {
   border: 1px solid var(--line);
-  padding: 16px;
+  padding: 18px 18px 16px;
   background: var(--paper);
-  border-radius: 14px;
+  border-radius: var(--radius);
+  box-shadow: 0 12px 32px rgba(80, 50, 20, 0.05);
 }
 
 .team-card header {
@@ -1137,8 +1171,15 @@ h1 {
   margin-bottom: 8px;
 }
 
+.team-card header h3 {
+  font-size: 22px;
+}
+
 .team-card .score {
+  font-family: var(--font-display);
   font-weight: 700;
+  font-size: 22px;
+  letter-spacing: -0.03em;
   color: var(--accent);
 }
 
@@ -1167,12 +1208,21 @@ h1 {
   border-bottom: 1px solid var(--line);
 }
 
+.team-card li strong {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .flag-wrap select {
   border: 1px solid var(--line);
   font-size: 12px;
-  padding: 4px 6px;
+  font-weight: 650;
+  padding: 6px 10px;
   background: var(--paper);
-  border-radius: 6px;
+  border-radius: var(--radius-pill);
+  color: var(--muted);
 }
 
 .team-card .bars {
@@ -1187,6 +1237,12 @@ h1 {
   justify-content: space-between;
   font-size: 12px;
   font-weight: 650;
+}
+
+.team-card .bars em {
+  font-style: normal;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
 }
 
 .team-card .rationale {
@@ -1208,7 +1264,7 @@ h1 {
 .pref-card {
   border: 1px solid var(--line);
   background: var(--paper);
-  border-radius: 14px;
+  border-radius: var(--radius);
   padding: 16px 18px;
   margin: 0 0 18px;
 }
@@ -1388,7 +1444,7 @@ h1 {
   min-width: 92px;
   background: var(--paper);
   border: 1px solid var(--line);
-  border-radius: 14px;
+  border-radius: var(--radius);
   padding: 8px 8px 10px;
   display: flex;
   flex-direction: column;
@@ -1586,8 +1642,17 @@ h1 {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
   margin: 0 0 18px;
+  padding: 16px 18px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.staff-row .field-help {
+  margin: 4px 0 0;
+  max-width: 42ch;
 }
 
 .staff-row label {
@@ -1627,6 +1692,46 @@ h1 {
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
 }
 
+.modal-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(43, 34, 27, 0.32);
+}
+
+.modal-card {
+  width: min(440px, 100%);
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 24px 22px 20px;
+  box-shadow: var(--shadow);
+}
+
+.modal-card h2 {
+  font-size: 26px;
+  margin-bottom: 4px;
+}
+
+.modal-card label {
+  display: block;
+  font-size: 13px;
+  font-weight: 650;
+  margin: 12px 0 6px;
+}
+
+.modal-card textarea {
+  width: 100%;
+  border: 1px solid var(--line);
+  background: #faf6f0;
+  padding: 12px 14px;
+  border-radius: 12px;
+  resize: vertical;
+}
+
 @media (max-width: 860px) {
   .admin-split,
   .saved-layout,
@@ -1636,5 +1741,28 @@ h1 {
 
   .signin-brand {
     text-align: left;
+  }
+
+  .signin-page {
+    padding: 28px 16px 48px;
+    align-items: flex-start;
+  }
+}
+
+@media (max-width: 640px) {
+  .header-course {
+    display: none;
+  }
+
+  .app-header-inner,
+  .app-main {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+
+  .header-nav {
+    margin-left: 0;
+    width: 100%;
+    order: 5;
   }
 }

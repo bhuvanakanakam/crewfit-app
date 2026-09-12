@@ -4,6 +4,7 @@ single student can demo the match flow without uploading a real roster."""
 from __future__ import annotations
 
 import random
+import re
 
 from faker import Faker
 
@@ -23,6 +24,8 @@ def generate_cohort(
     count: int = 15,
     seed: int | None = None,
     exclude_names: set[str] | None = None,
+    id_prefix: str = "syn",
+    focus_skills: list[str] | None = None,
 ) -> list[StructuredProfile]:
     fake = Faker()
     if seed is not None:
@@ -35,9 +38,9 @@ def generate_cohort(
         used_names |= {n.strip().lower() for n in exclude_names if n.strip()}
 
     for i in range(count):
-        name = fake.first_name()
+        name = fake.name()
         while name.lower() in used_names:
-            name = fake.first_name()
+            name = fake.name()
         used_names.add(name.lower())
 
         goal = random.choices(GOALS, weights=GOAL_WEIGHTS, k=1)[0]
@@ -57,14 +60,15 @@ def generate_cohort(
             "analysis": random.randint(2, 5),
             "presentation": random.randint(2, 5),
         }
-        strong = random.choice(list(skills))
+        pool = [key for key in (focus_skills or []) if key in skills] or list(skills)
+        strong = random.choice(pool)
         weak = random.choice([k for k in skills if k != strong])
         skills[strong] = 5
         skills[weak] = 1
 
         profiles.append(
             StructuredProfile(
-                id=f"syn-{i}",
+                id=f"{id_prefix}-{re.sub(r'[^a-z0-9]+', '-', name.lower()).strip('-') or i}",
                 name=name,
                 bio=fake.sentence(nb_words=12),
                 goal=goal,  # type: ignore[arg-type]

@@ -1,4 +1,4 @@
-# CrewFit
+# squadly
 
 Constraint- based team formation for a cohort — parses free-text self-descriptions with Grok,
 solves the actual team assignment with OR-Tools CP-SAT, and explains why each team was grouped
@@ -57,7 +57,7 @@ npm install
 npm run dev
 ```
 
-Open the URL Vite prints (typically `http://localhost:5173`). The dev server proxies `/api/*`
+Open the URL Vite prints (typically `https://localhost:5173` — accept the local cert warning). Auth0 only allows that HTTPS callback. The dev server proxies `/api/*`
 to `http://localhost:8000` automatically (see `frontend/vite.config.ts`), so both halves talk to
 each other with no extra config.
 
@@ -95,7 +95,7 @@ fix it — you'd need a full re-solve of the affected subset. That's flagged as 
 1. **(15s)** Problem: people pick teammates on vibes; teams break on goals, schedule, workload, skill gaps.
 2. **(30s)** Load the sample roster; live-parse 2–3 ambiguous bios — show clarifying questions.
 3. **(45s)** Optimize; walk team cards, score bars, and Grok rationales. Mention vetoes if you set any.
-4. **(30s)** Point at CrewFit score vs random baseline.
+4. **(30s)** Point at the squadly score vs random baseline.
 5. **(30s)** Flag someone → show the local re-optimize note (swap, subset re-solve, or structural no-op).
 6. **(10s)** Close: Optimization track — CP-SAT assigns; Grok only structures + explains.
 

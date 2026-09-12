@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import Counter
 
+from .models import DEFAULT_SKILL_LABELS, SKILL_KEYS
 from .slots import DAY_LABEL
 
 GOAL_PHRASE = {
@@ -13,15 +14,10 @@ GOAL_PHRASE = {
     "deep_mastery": "Learn the material deeply",
 }
 
-SKILL_LABEL = {
-    "technical": "Technical",
-    "writing": "Writing",
-    "analysis": "Analysis",
-    "presentation": "Presentation",
-}
+SKILL_LABEL = dict(DEFAULT_SKILL_LABELS)
 
 _TIME_SHORT = {"morning": "morning", "afternoon": "afternoon", "evening": "evening"}
-_SKILL_KEYS = ("technical", "writing", "analysis", "presentation")
+_SKILL_KEYS = SKILL_KEYS
 
 
 def human_slot(slot: str) -> str:
@@ -48,13 +44,17 @@ def shared_windows(members: list) -> list[str]:
     return sorted(overlap)
 
 
-def skill_coverage(members: list) -> tuple[list[str], list[str]]:
+def skill_coverage(members: list, keys: list[str] | tuple[str, ...] | None = None) -> tuple[list[str], list[str]]:
     covered: list[str] = []
     thin: list[str] = []
-    for key in _SKILL_KEYS:
+    for key in keys or _SKILL_KEYS:
         peak = max(getattr(m.skills, key) for m in members)
         (covered if peak >= 4 else thin).append(key)
     return covered, thin
+
+
+def skill_peaks(members: list, keys: list[str] | tuple[str, ...] | None = None) -> dict[str, int]:
+    return {key: max(getattr(m.skills, key) for m in members) for key in (keys or _SKILL_KEYS)}
 
 
 def dominant_goal(members: list) -> str:
@@ -63,7 +63,13 @@ def dominant_goal(members: list) -> str:
     return Counter(m.goal for m in members).most_common(1)[0][0]
 
 
-def grounded_why(shared: list[str], goal: str, covered: list[str], thin: list[str]) -> str:
+def grounded_why(
+    shared: list[str],
+    goal: str,
+    covered: list[str],
+    thin: list[str],
+    skill_labels: dict[str, str] | None = None,
+) -> str:
     parts: list[str] = []
     if shared:
         parts.append(f"You share {human_list([human_slot(s) for s in shared])}")
@@ -71,8 +77,9 @@ def grounded_why(shared: list[str], goal: str, covered: list[str], thin: list[st
         parts.append("There’s no fully shared meeting window, so plan to work async")
     phrase = GOAL_PHRASE.get(goal, goal)
     parts.append(f"the team goal is to {phrase[0].lower() + phrase[1:]}")
-    cov = [SKILL_LABEL[k] for k in covered]
-    weak = [SKILL_LABEL[k] for k in thin]
+    labels = {**SKILL_LABEL, **(skill_labels or {})}
+    cov = [labels.get(k, k) for k in covered]
+    weak = [labels.get(k, k) for k in thin]
     if cov:
         verb = "is" if len(cov) == 1 else "are"
         parts.append(f"{human_list(cov)} {verb} covered")
@@ -88,15 +95,21 @@ def grounded_why(shared: list[str], goal: str, covered: list[str], thin: list[st
     return ". ".join(sentences) + "."
 
 
-def team_facts(members: list) -> dict:
+def team_facts(
+    members: list,
+    focus_skills: list[str] | None = None,
+    skill_labels: dict[str, str] | None = None,
+) -> dict:
     shared = shared_windows(members)
     goal = dominant_goal(members)
-    covered, thin = skill_coverage(members)
+    keys = focus_skills or list(_SKILL_KEYS)
+    covered, thin = skill_coverage(members, keys)
     return {
         "shared_windows": shared,
         "team_goal": GOAL_PHRASE.get(goal, goal),
         "goal_key": goal,
         "coverage": covered,
         "thin": thin,
-        "rationale": grounded_why(shared, goal, covered, thin),
+        "skill_peaks": skill_peaks(members, keys),
+        "rationale": grounded_why(shared, goal, covered, thin, skill_labels),
     }
