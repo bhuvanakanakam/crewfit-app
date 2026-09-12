@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import "./app.css";
+import "./styles.css";
 import AdminDashboard from "./components/AdminDashboard";
+import AppHeader from "./components/AppHeader";
 import ChatInterview from "./components/ChatInterview";
 import CoursePicker from "./components/CoursePicker";
 import MyTeam from "./components/MyTeam";
@@ -23,7 +24,15 @@ import {
   type Role,
   type Session,
 } from "./session";
-import { toCourseContext, type Course, type LoginResponse, type MatchResponse, type StructuredProfile } from "./types";
+import {
+  hasOfficialTeam,
+  isPendingProfile,
+  toCourseContext,
+  type Course,
+  type LoginResponse,
+  type MatchResponse,
+  type StructuredProfile,
+} from "./types";
 
 type StudentView = "intake" | "saved" | "matching" | "team" | "update";
 
@@ -41,7 +50,7 @@ export default function App() {
   const [studentView, setStudentView] = useState<StudentView>(() => {
     const s = loadSession();
     const mine = s ? profileFor(s.name) : loadProfile();
-    return mine ? "saved" : "intake";
+    return mine && !isPendingProfile(mine) ? "saved" : "intake";
   });
   const [error, setError] = useState<string | null>(null);
   const [focusStudent, setFocusStudent] = useState<string | null>(null);
@@ -49,13 +58,18 @@ export default function App() {
   const [openingCourse, setOpeningCourse] = useState(false);
   const [prefNote, setPrefNote] = useState<string | null>(null);
   const [prefHurt, setPrefHurt] = useState(false);
+  const [deskTab, setDeskTab] = useState<"students" | "teams">("students");
   const signingOut = useRef(false);
 
   useEffect(() => {
-    if (!session) return;
+    if (!session || session.demo) return;
+    if (!auth.configured || auth.isLoading || !auth.isAuthenticated) return;
     let cancelled = false;
-    loginAccount(session.name, session.role)
-      .then((res) => {
+    void (async () => {
+      try {
+        const token = await auth.getIdToken();
+        if (!token || cancelled) return;
+        const res = await loginAccount({ id_token: token, requested_role: session.role });
         if (cancelled) return;
         setSession((cur) => {
           if (!cur) return cur;
@@ -77,19 +91,19 @@ export default function App() {
           saveSession(next);
           return next;
         });
-      })
-      .catch(() => {
+      } catch {
         if (cancelled) return;
         if (session.role !== "teacher") return;
         clearSession();
         setSession(null);
         setCourse(null);
-        setError("That name isn’t staff. Sign in as a student, or ask an instructor to add you as a TA.");
-      });
+        setError("You’re not listed as course staff. Sign in as a student, or ask an instructor to add you as a TA.");
+      }
+    })();
     return () => {
       cancelled = true;
     };
-  }, [session?.name, session?.role]);
+  }, [session?.name, session?.role, auth.configured, auth.isAuthenticated, auth.isLoading]);
 
   useEffect(() => {
     if (!session?.courseId) {
@@ -108,30 +122,33 @@ export default function App() {
   useEffect(() => {
     if (!auth.configured || auth.isLoading || signingOut.current) return;
     if (!auth.isAuthenticated || !auth.user) {
-      if (!session || session.local) return;
+      if (!session || session.demo) return;
       clearSession();
       setSession(null);
       setCourse(null);
       setMatch(null);
       return;
     }
-    const name = displayNameFromUser(auth.user);
-    if (session?.name === name) return;
-    const existing = loadSession();
-    const requested = consumePendingRole() ?? existing?.role ?? session?.role ?? "student";
-    void applyAuthLogin(name, requested);
+    const authName = displayNameFromUser(auth.user);
+    if (session && (session.name === authName || session.name === auth.user.name)) return;
+    const requested = consumePendingRole() ?? session?.role ?? loadSession()?.role ?? "student";
+    void applyAuthLogin(requested);
   }, [auth.configured, auth.isLoading, auth.isAuthenticated, auth.user, session]);
 
-  async function applyAuthLogin(name: string, requested: Role) {
+  async function applyAuthLogin(requested: Role) {
     try {
-      const res = await loginAccount(name, requested);
-      applyLogin(res, false);
+      const token = await auth.getIdToken();
+      if (!token) throw new Error("Auth0 did not return a token.");
+      const res = await loginAccount({ id_token: token, requested_role: requested });
+      applyLogin(res);
     } catch (e) {
       const message = e instanceof Error ? e.message : "Couldn't sign in.";
       if (requested === "teacher") {
         try {
-          const student = await loginAccount(name, "student");
-          applyLogin(student, false);
+          const token = await auth.getIdToken();
+          if (!token) throw new Error(message);
+          const student = await loginAccount({ id_token: token, requested_role: "student" });
+          applyLogin(student);
           setError(message);
           return;
         } catch {
@@ -142,14 +159,14 @@ export default function App() {
     }
   }
 
-  function applyLogin(res: LoginResponse, local: boolean) {
+  function applyLogin(res: LoginResponse, demo = false) {
     const next: Session = {
       name: res.name,
       role: res.role,
       staffKind: res.staff_kind,
       canCreateCourse: res.can_create_course,
       courseId: null,
-      local,
+      demo,
     };
     saveSession(next);
     setSession(next);
@@ -158,27 +175,25 @@ export default function App() {
     setError(null);
     const mine = profileFor(res.name);
     setProfile(mine);
-    setStudentView(mine ? "saved" : "intake");
-  }
-
-  function signIn(res: LoginResponse, local: boolean) {
-    applyLogin(res, local);
+    setStudentView(mine && !isPendingProfile(mine) ? "saved" : "intake");
   }
 
   useEffect(() => {
     if (!session || session.role !== "student" || !course) return;
     lookupProfile(session.name, course.id)
       .then((res) => {
-        if (res.profile) {
+        if (res.profile && !isPendingProfile(res.profile)) {
           setProfile(res.profile);
           saveProfile(res.profile);
+        } else if (!res.profile) {
+          setProfile((cur) => (cur && !isPendingProfile(cur) ? cur : null));
         }
-        if (res.match) {
+        if (hasOfficialTeam(res.match)) {
           setMatch(res.match);
           saveMatch(session.name, course.id, res.match);
           setRematchAllowed(Boolean(res.rematch_allowed));
           setStudentView((cur) => (cur === "update" ? cur : "team"));
-        } else if (res.profile || profile) {
+        } else if (res.profile && !isPendingProfile(res.profile)) {
           setMatch(null);
           setRematchAllowed(false);
           setStudentView((cur) => (cur === "update" ? cur : "saved"));
@@ -196,11 +211,11 @@ export default function App() {
   }, [session?.name, session?.role, course?.id]);
 
   function openProfile() {
-    if (match) {
+    if (profile && !isPendingProfile(profile)) {
       setStudentView("saved");
       return;
     }
-    setStudentView(profile ? "saved" : "intake");
+    setStudentView("intake");
   }
 
   async function savePrefs(p: StructuredProfile) {
@@ -219,14 +234,35 @@ export default function App() {
         setPrefNote(null);
         setPrefHurt(false);
       }
+      if (course) {
+        const looked = await lookupProfile(session.name, course.id);
+        if (looked.profile && !isPendingProfile(looked.profile)) {
+          setProfile(looked.profile);
+          saveProfile(looked.profile);
+        }
+        if (hasOfficialTeam(looked.match)) {
+          setMatch(looked.match);
+          saveMatch(session.name, course.id, looked.match);
+        }
+      }
     } catch {
       /* keep local copy */
     }
-    setStudentView(match ? "team" : "saved");
+    setStudentView(hasOfficialTeam(match) ? "team" : "saved");
   }
 
-  function pickCourse(picked: Course) {
+  async function pickCourse(picked: Course) {
     if (!session) return;
+    if (session.role === "student") {
+      setOpeningCourse(true);
+      try {
+        await enrollInCourse(picked.id, session.name);
+      } catch (e) {
+        setOpeningCourse(false);
+        setError(e instanceof Error ? e.message : "Couldn't enroll in that course.");
+        return;
+      }
+    }
     const next = { ...session, courseId: picked.id };
     setSession(next);
     saveSession(next);
@@ -235,10 +271,6 @@ export default function App() {
     setError(null);
     setPrefNote(null);
     setFocusStudent(null);
-    if (session.role === "student") {
-      setOpeningCourse(true);
-      void enrollInCourse(picked.id, session.name).catch(() => undefined);
-    }
   }
 
   function signOut() {
@@ -248,7 +280,7 @@ export default function App() {
     setCourse(null);
     setMatch(null);
     setError(null);
-    if (auth.configured) {
+    if (auth.configured && !session?.demo) {
       auth.logout();
       return;
     }
@@ -273,190 +305,157 @@ export default function App() {
     setStudentView("matching");
     setError(null);
     try {
-      await submitProfile(p, course.id).catch(() => undefined);
-      const res = await findMatch(p, toCourseContext(course), course.id, 16);
+      const saved = await submitProfile(p, course.id).catch(() => undefined);
+      if (saved?.profile) {
+        setProfile(saved.profile);
+        saveProfile(saved.profile);
+      }
+      const res = await findMatch(saved?.profile ?? p, toCourseContext(course), course.id, 20);
       setMatch(res);
       saveMatch(session.name, course.id, res);
       setRematchAllowed(false);
-      setStudentView("team");
+      setStudentView(hasOfficialTeam(res) ? "team" : "saved");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Couldn't find a team.");
       setStudentView("saved");
     }
   }
 
-  const signedIn = Boolean(session) && (!auth.configured || auth.isLoading || auth.isAuthenticated);
-  const inCourse = Boolean(session && course);
+  const signedIn =
+    Boolean(session) &&
+    (Boolean(session?.demo) || (auth.configured && (auth.isLoading || auth.isAuthenticated)));
+  const staff = session?.role === "teacher";
+  const roleLabel =
+    session?.staffKind === "ta" && session.role === "teacher"
+      ? "TA"
+      : session?.role === "teacher"
+        ? "Instructor"
+        : "Student";
 
   return (
-    <div className={`app-shell${signedIn ? "" : " guest"}`}>
-      {signedIn && (
-        <header className="app-header">
-          <div className="app-header-inner">
-            <span className="logo">CrewFit</span>
-            {course && <span className="header-course">{course.name}</span>}
-            {session && (
-              <span className="header-chip">
-                {session.staffKind === "ta" && session.role === "teacher"
-                  ? "TA"
-                  : session.role === "teacher"
-                    ? "Instructor"
-                    : "Student"}
-              </span>
-            )}
-            {session?.role === "student" && course && (
-              <nav className="header-nav" aria-label="Student">
-                <button
-                  type="button"
-                  className={studentView === "intake" || studentView === "saved" || studentView === "update" ? "active" : ""}
-                  onClick={openProfile}
-                >
-                  Chat
-                </button>
-                <button
-                  type="button"
-                  className={studentView === "team" || studentView === "matching" ? "active" : ""}
-                  disabled={!match && studentView !== "matching"}
-                  onClick={() => match && setStudentView("team")}
-                >
-                  Your team
-                </button>
-              </nav>
-            )}
-            {session && (
-              <div className="header-you">
-                {course && session && (session.role === "teacher" || session.role === "student") && (
-                  <NotifyMenu
-                    courseId={course.id}
-                    name={session.name}
-                    role={session.role}
-                    onOpenStudent={setFocusStudent}
-                    onOpenTeam={() => setStudentView("team")}
-                    onChanged={() => setRosterTick((n) => n + 1)}
-                  />
-                )}
-                {auth.user?.picture && (
-                  <img src={auth.user.picture} alt="" className="header-avatar" referrerPolicy="no-referrer" />
-                )}
-                <span className="header-name">{session.name}</span>
-                {inCourse && (
-                  <button type="button" className="header-link" onClick={changeCourse}>
-                    Courses
-                  </button>
-                )}
-                <button type="button" className="header-link" onClick={signOut}>
-                  Sign out
-                </button>
-              </div>
-            )}
-          </div>
-        </header>
+    <div className="relative min-h-screen bg-background">
+      {signedIn && course && session && (
+        <AppHeader
+          staff={staff}
+          wide
+          courseName={course.name}
+          roleLabel={roleLabel}
+          userName={session.name}
+          deskTab={deskTab}
+          studentView={studentView}
+          hasTeam={hasOfficialTeam(match)}
+          onDeskTab={setDeskTab}
+          onOpenProfile={openProfile}
+          onOpenTeam={() => hasOfficialTeam(match) && setStudentView("team")}
+          onChangeCourse={changeCourse}
+          onSignOut={signOut}
+          notify={
+            <NotifyMenu
+              courseId={course.id}
+              name={session.name}
+              role={session.role}
+              onOpenStudent={(who) => {
+                setFocusStudent(who);
+                setDeskTab("students");
+              }}
+              onOpenTeam={() => setStudentView("team")}
+              onChanged={() => setRosterTick((n) => n + 1)}
+            />
+          }
+        />
       )}
 
-      <main
-        className={`app-main${session?.role === "teacher" && course ? " wide" : ""}${signedIn ? "" : " splash"}`}
-      >
-        {error && signedIn && <div className="error-banner">{error}</div>}
+      {!signedIn && <SignIn onSignIn={applyLogin} banner={error} />}
 
-        {!signedIn && <SignIn onSignIn={signIn} banner={error} />}
+      {signedIn && !courseReady && <p className="px-6 py-16 text-muted-foreground">Loading…</p>}
 
-        {signedIn && !courseReady && <p className="page-dek">Loading…</p>}
+      {signedIn && courseReady && !course && session && (
+        <CoursePicker
+          name={session.name}
+          role={session.role}
+          staffKind={session.staffKind}
+          canCreateCourse={session.canCreateCourse}
+          onPick={pickCourse}
+          onSignOut={signOut}
+        />
+      )}
 
-        {signedIn && courseReady && !course && session && (
-          <CoursePicker
-            name={session.name}
-            role={session.role}
-            staffKind={session.staffKind}
-            canCreateCourse={session.canCreateCourse}
-            onPick={pickCourse}
-          />
-        )}
+      {signedIn && course && (
+        <main className={`mx-auto px-5 py-9 sm:px-8 sm:py-12 ${staff ? "max-w-[1440px]" : studentView === "team" ? "max-w-[1120px]" : "max-w-[920px]"}`}>
+          {error && <p className="mb-5 rounded-xl bg-warn-soft p-3 text-sm font-semibold text-warn">{error}</p>}
 
-        {signedIn && session?.role === "teacher" && course && (
-          <AdminDashboard
-            course={course}
-            actor={session.name}
-            canManageStaff={course.access === "teacher"}
-            focusName={focusStudent}
-            reloadToken={rosterTick}
-          />
-        )}
+          {session?.role === "teacher" && (
+            <AdminDashboard
+              course={course}
+              actor={session.name}
+              canManageStaff={course.access === "teacher"}
+              focusName={focusStudent}
+              reloadToken={rosterTick}
+              deskTab={deskTab}
+            />
+          )}
 
-        {signedIn && session?.role === "student" && course && openingCourse && (
-          <p className="page-dek">Opening course…</p>
-        )}
+          {session?.role === "student" && openingCourse && <p className="text-muted-foreground">Opening course…</p>}
 
-        {signedIn && session?.role === "student" && course && !openingCourse && studentView === "intake" && !(match && !rematchAllowed) && (
-          <ChatInterview
-            key={`${session.name}-${course.id}`}
-            name={session.name}
-            course={course}
-            onReady={(p) => void runMatch(p)}
-          />
-        )}
+          {session?.role === "student" && !openingCourse && studentView === "intake" && !hasOfficialTeam(match) && (
+            <ChatInterview
+              key={`${session.name}-${course.id}`}
+              name={session.name}
+              course={course}
+              onReady={(p) => void runMatch(p)}
+            />
+          )}
 
-        {signedIn && session?.role === "student" && course && !openingCourse && studentView === "intake" && match && !rematchAllowed && profile && (
-          <SavedStyle
-            profile={profile}
-            course={course}
-            matching={false}
-            hasTeam
-            rematchAllowed={false}
-            team={match}
-            onMatch={() => undefined}
-            onViewTeam={() => setStudentView("team")}
-            onUpdate={() => setStudentView("update")}
-          />
-        )}
+          {session?.role === "student" && !openingCourse && studentView === "saved" && profile && !isPendingProfile(profile) && (
+            <SavedStyle
+              profile={profile}
+              course={course}
+              matching={false}
+              hasTeam={hasOfficialTeam(match)}
+              rematchAllowed={rematchAllowed}
+              team={match}
+              onMatch={() => void runMatch(profile)}
+              onViewTeam={() => hasOfficialTeam(match) && setStudentView("team")}
+              onUpdate={() => setStudentView("update")}
+              onRematch={() => void runMatch(profile)}
+            />
+          )}
 
-        {signedIn && session?.role === "student" && course && !openingCourse && studentView === "saved" && profile && (
-          <SavedStyle
-            profile={profile}
-            course={course}
-            matching={false}
-            hasTeam={Boolean(match)}
-            rematchAllowed={rematchAllowed}
-            team={match}
-            onMatch={() => void runMatch(profile)}
-            onViewTeam={() => match && setStudentView("team")}
-            onUpdate={() => setStudentView("update")}
-            onRematch={() => void runMatch(profile)}
-          />
-        )}
+          {session?.role === "student" && !openingCourse && studentView === "update" && profile && (
+            <PrefUpdate
+              name={session.name}
+              course={course}
+              profile={profile}
+              onSave={(p) => void savePrefs(p)}
+              onCancel={() => setStudentView(hasOfficialTeam(match) ? "team" : "saved")}
+            />
+          )}
 
-        {signedIn && session?.role === "student" && course && !openingCourse && studentView === "update" && profile && (
-          <PrefUpdate
-            name={session.name}
-            course={course}
-            profile={profile}
-            onSave={(p) => void savePrefs(p)}
-            onCancel={() => setStudentView(match ? "team" : "saved")}
-          />
-        )}
+          {session?.role === "student" && studentView === "matching" && (
+            <div className="flex min-h-[65vh] flex-col items-center justify-center text-center">
+              <span className="crew-pulse mb-7 size-5 rounded-full bg-primary" aria-hidden />
+              <h1 className="font-mono text-3xl font-semibold tracking-[-0.04em]">Finding your team…</h1>
+              <p className="mt-3 text-muted-foreground">Balancing goals, time, skills, and working rhythm.</p>
+            </div>
+          )}
 
-        {signedIn && session?.role === "student" && course && studentView === "matching" && (
-          <div className="matching-state">
-            <span className="pulse" aria-hidden />
-            <h1>Finding your team…</h1>
-            <p className="page-dek">Matching hours, goals, and skills for {course.name}.</p>
-          </div>
-        )}
+          {session?.role === "student" && !openingCourse && studentView === "team" && hasOfficialTeam(match) && match && (
+            <MyTeam
+              result={match}
+              yourName={session.name}
+              course={course}
+              profile={profile}
+              rematchAllowed={rematchAllowed}
+              impactNote={prefNote}
+              impactHurt={prefHurt}
+              onChangeCourse={changeCourse}
+              onUpdatePrefs={() => setStudentView("update")}
+              onRematch={profile ? () => void runMatch(profile) : undefined}
+            />
+          )}
+        </main>
+      )}
 
-        {signedIn && session?.role === "student" && course && !openingCourse && studentView === "team" && match && (
-          <MyTeam
-            result={match}
-            yourName={session.name}
-            course={course}
-            profile={profile}
-            rematchAllowed={rematchAllowed}
-            impactNote={prefNote}
-            impactHurt={prefHurt}
-            onChangeCourse={changeCourse}
-            onUpdatePrefs={() => setStudentView("update")}
-            onRematch={profile ? () => void runMatch(profile) : undefined}
-          />
-        )}
-      </main>
     </div>
   );
 }

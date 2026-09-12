@@ -1,9 +1,14 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { CalendarDays, Users } from "lucide-react";
 import { sendChat } from "../api";
-import ProfileCard from "./ProfileCard";
-import AvailCalendar from "./AvailCalendar";
 import { ChatBody } from "./ChatBody";
+import PageIntro from "./PageIntro";
+import TerminalChrome from "./TerminalChrome";
+import { WeekCalendar } from "./WeekCalendar";
+import { Button } from "./ui/button";
 import {
+  GOAL_LABELS,
+  ROLE_LABELS,
   formatSlot,
   toCourseContext,
   type ChatMessage,
@@ -25,7 +30,7 @@ export default function ChatInterview({ name, course, onReady }: Props) {
   const [profile, setProfile] = useState<StructuredProfile | null>(null);
   const [availSlots, setAvailSlots] = useState<string[]>([]);
   const scroller = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
   const ctx = toCourseContext(course);
 
   useEffect(() => {
@@ -56,7 +61,7 @@ export default function ChatInterview({ name, course, onReady }: Props) {
   }, [name, course.id]);
 
   const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant")?.content ?? "";
-  const askingAvail = /free to meet|when you can meet|mornings, afternoons|evenings/i.test(lastAssistant);
+  const askingAvail = /free to meet|when you can meet|mornings, afternoons|evenings|reliably meet/i.test(lastAssistant);
 
   async function send(textOverride?: string) {
     const text = (textOverride ?? draft).trim();
@@ -86,95 +91,99 @@ export default function ChatInterview({ name, course, onReady }: Props) {
     }
   }
 
-  function toggleAvail(slot: string) {
-    setAvailSlots((cur) => (cur.includes(slot) ? cur.filter((s) => s !== slot) : [...cur, slot]));
-  }
-
   function sendAvail() {
     if (availSlots.length === 0) return;
-    const ordered = availSlots.slice().sort();
-    void send(ordered.map(formatSlot).join(", "));
+    void send(availSlots.slice().sort().map(formatSlot).join(", "));
   }
 
-  function onComposerKey(e: KeyboardEvent<HTMLTextAreaElement>) {
-    if (e.key === "Enter" && !e.shiftKey) {
+  function onComposerKey(e: KeyboardEvent<HTMLInputElement>) {
+    if (e.key === "Enter") {
       e.preventDefault();
       void send();
     }
   }
 
   return (
-    <div className="chat-wrap">
-      <div className="page-head">
-        <p className="kicker">{course.name}</p>
-        <h1>How do you work?</h1>
-        <p className="page-dek">Talk normally. I’ll pull out what I need and ask if something’s still unclear.</p>
-      </div>
+    <div className="space-y-6">
+      <PageIntro
+        kicker="How do you work?"
+        title="A short conversation, then we match."
+        body="Your answers stay private. Teammates only see names and shared facts."
+      />
 
-      <div className="chat-panel">
-        <div className="chat-thread" ref={scroller} role="log" aria-live="polite">
-          {messages.map((m, i) => (
-            <div key={`${m.role}-${i}`} className={`bubble ${m.role}`}>
-              <span className="bubble-who">{m.role === "assistant" ? "Assistant" : name}</span>
-              <ChatBody text={m.content} />
-            </div>
-          ))}
+      <TerminalChrome title="chat" bodyClassName="space-y-4 p-5 sm:p-7">
+        <div className="space-y-4" ref={scroller} role="log" aria-live="polite">
+          {messages.map((m, i) =>
+            m.role === "assistant" ? (
+              <div key={i} className="max-w-[90%] rounded-xl border bg-background/80 px-4 py-3 font-mono text-sm">
+                <ChatBody text={m.content} />
+              </div>
+            ) : (
+              <div key={i} className="ml-auto max-w-[86%] rounded-xl bg-primary px-4 py-3 font-mono text-sm text-primary-foreground">
+                <ChatBody text={m.content} />
+              </div>
+            ),
+          )}
           {busy && (
-            <div className="bubble assistant">
-              <span className="bubble-who">Assistant</span>
-              <p className="typing">Thinking…</p>
+            <div className="max-w-[90%] rounded-xl border bg-background/80 px-4 py-3 font-mono text-sm text-muted-foreground">
+              Thinking…
             </div>
           )}
         </div>
 
-        {error && <div className="error-banner chat-error">{error}</div>}
+        {error && <p className="rounded-md bg-warn-soft p-3 font-mono text-sm text-warn">{error}</p>}
+
+        {!profile && askingAvail && (
+          <div className="border-t border-primary/20 pt-5">
+            <div className="mb-4 flex items-center justify-between">
+              <div>
+                <h3 className="font-mono text-lg font-semibold tracking-[-0.03em]">Your week</h3>
+                <p className="text-sm text-muted-foreground">Click the times you can reliably meet.</p>
+              </div>
+              <CalendarDays className="text-primary" />
+            </div>
+            <WeekCalendar slots={availSlots} onToggle={(slot) => setAvailSlots((cur) => (cur.includes(slot) ? cur.filter((s) => s !== slot) : [...cur, slot]))} />
+            <Button className="mt-4" variant="outline" disabled={busy || availSlots.length === 0} onClick={sendAvail}>
+              Use these slots
+            </Button>
+          </div>
+        )}
 
         {!profile && (
-          <>
-            {askingAvail && (
-              <div className="avail-composer">
-                <AvailCalendar slots={availSlots} onToggle={toggleAvail} />
-                <button
-                  className="btn ghost"
-                  type="button"
-                  disabled={busy || availSlots.length === 0}
-                  onClick={sendAvail}
-                >
-                  Use these slots
-                </button>
-              </div>
-            )}
-            <div className="chat-composer">
-              <textarea
+          <div className="border-t border-primary/20 pt-4">
+            <div className="flex gap-3">
+              <span className="hidden items-center font-mono text-primary sm:flex">$</span>
+              <input
                 ref={inputRef}
-                rows={3}
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
                 onKeyDown={onComposerKey}
-                placeholder="Type anything — a sentence or a whole paragraph."
+                placeholder="write a short answer…"
                 disabled={busy}
+                className="h-11 flex-1 rounded-md border border-primary/25 bg-background px-3 font-mono text-sm outline-none ring-ring focus-visible:ring-2"
               />
-              <button className="btn primary" type="button" disabled={!draft.trim() || busy} onClick={() => void send()}>
-                Send
-              </button>
+              <Button disabled={!draft.trim() || busy} onClick={() => void send()}>
+                send
+              </Button>
             </div>
-          </>
-        )}
-
-        {profile && (
-          <div className="chat-ready">
-            <div className="cta-card nested">
-              <p className="kicker">Ready</p>
-              <h3>Profile saved</h3>
-              <p>We’ll match you on hours, goals, and skills — not on a personality quiz dump.</p>
-              <button className="btn primary lg" type="button" onClick={() => onReady(profile)}>
-                Find my team
-              </button>
-            </div>
-            <ProfileCard profile={profile} compact />
           </div>
         )}
-      </div>
+      </TerminalChrome>
+
+      {profile && (
+        <div className="rounded-md border border-primary bg-accent-soft p-6 sm:flex sm:items-center sm:justify-between">
+          <div>
+            <div className="kicker">Ready to match</div>
+            <h2 className="mt-1 font-mono text-2xl font-semibold tracking-[-0.03em]">Your working style is saved.</h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              {profile.hours} hours · {GOAL_LABELS[profile.goal]} · {ROLE_LABELS[profile.role]}
+            </p>
+          </div>
+          <Button size="lg" className="mt-5 w-full sm:mt-0 sm:w-auto" onClick={() => onReady(profile)}>
+            Find my team <Users />
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

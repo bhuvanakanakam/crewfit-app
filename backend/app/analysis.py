@@ -8,7 +8,7 @@ from .solver import legal_team_sizes, solve_teams
 BREAKDOWN_KEYS = ["goal", "avail", "skill", "workload"]
 
 
-def team_stats(members: list, vetoes: set) -> dict:
+def team_stats(members: list, vetoes: set, focus_skills: list[str] | None = None) -> dict:
     total = 0.0
     violations = 0
     agg = {k: 0.0 for k in BREAKDOWN_KEYS}
@@ -16,7 +16,7 @@ def team_stats(members: list, vetoes: set) -> dict:
 
     for a, b in combinations(members, 2):
         count += 1
-        result = pair_score(a, b, vetoes)
+        result = pair_score(a, b, vetoes, focus_skills)
         if result is None:
             # explicit veto pair landed together anyway (only possible in the
             # random baseline, never in the solver's own output)
@@ -36,23 +36,29 @@ def team_stats(members: list, vetoes: set) -> dict:
     return {"avg": avg, "violations": violations, "breakdown": breakdown}
 
 
-def total_score(teams: list[list], vetoes: set) -> float:
+def total_score(teams: list[list], vetoes: set, focus_skills: list[str] | None = None) -> float:
     if not teams:
         return 0.0
-    return sum(team_stats(t, vetoes)["avg"] for t in teams) / len(teams)
+    return sum(team_stats(t, vetoes, focus_skills)["avg"] for t in teams) / len(teams)
 
 
-def floor_score(teams: list[list], vetoes: set) -> float:
+def floor_score(teams: list[list], vetoes: set, focus_skills: list[str] | None = None) -> float:
     if not teams:
         return 0.0
-    return min(team_stats(t, vetoes)["avg"] for t in teams)
+    return min(team_stats(t, vetoes, focus_skills)["avg"] for t in teams)
 
 
-def legal_random_partition(people: list, min_size: int, max_size: int, rng: random.Random | None = None):
+def legal_random_partition(
+    people: list,
+    min_size: int,
+    max_size: int,
+    rng: random.Random | None = None,
+    team_count: int | None = None,
+):
     rng = rng or random
     shuffled = people[:]
     rng.shuffle(shuffled)
-    sizes = legal_team_sizes(len(people), min_size, max_size)
+    sizes = legal_team_sizes(len(people), min_size, max_size, team_count)
     teams = []
     idx = 0
     for size in sizes:
@@ -68,13 +74,19 @@ def random_baseline_score(
     max_size: int,
     samples: int = 16,
     rng: random.Random | None = None,
+    team_count: int | None = None,
+    focus_skills: list[str] | None = None,
 ) -> float:
     """Mean of legal random partitions (same size bounds as the solver)."""
     rng = rng or random.Random()
     if not people:
         return 0.0
     scores = [
-        total_score(legal_random_partition(people, min_size, max_size, rng), vetoes)
+        total_score(
+            legal_random_partition(people, min_size, max_size, rng, team_count=team_count),
+            vetoes,
+            focus_skills,
+        )
         for _ in range(samples)
     ]
     return sum(scores) / len(scores)

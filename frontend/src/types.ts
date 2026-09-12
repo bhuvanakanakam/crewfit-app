@@ -1,10 +1,17 @@
 export type GoalType = "pass" | "grade_A" | "research" | "deep_mastery";
 
+export const ALL_SKILL_KEYS = ["technical", "writing", "analysis", "presentation"] as const;
+export type SkillKey = (typeof ALL_SKILL_KEYS)[number];
+
 export interface CourseContext {
   name: string;
   grading_notes: string;
   team_size_min: number;
   team_size_max: number;
+  team_count?: number | null;
+  objective?: string;
+  focus_skills?: string[];
+  skill_labels?: Record<string, string>;
 }
 
 export interface Course {
@@ -13,6 +20,10 @@ export interface Course {
   grading_notes: string;
   team_size_min: number;
   team_size_max: number;
+  team_count?: number | null;
+  objective?: string;
+  focus_skills?: string[];
+  skill_labels?: Record<string, string>;
   access?: "student" | "teacher" | "ta";
   enrolled?: boolean;
 }
@@ -20,9 +31,13 @@ export interface Course {
 export function toCourseContext(course: Course): CourseContext {
   return {
     name: course.name,
-    grading_notes: course.grading_notes,
+    grading_notes: course.objective || course.grading_notes,
     team_size_min: course.team_size_min,
     team_size_max: course.team_size_max,
+    team_count: course.team_count,
+    objective: course.objective || course.grading_notes,
+    focus_skills: course.focus_skills,
+    skill_labels: course.skill_labels,
   };
 }
 
@@ -64,6 +79,20 @@ export interface MatchResponse {
   thin: string[];
   course_id: string;
   course_name: string;
+  team_id?: string;
+  team_label?: string;
+  waiting?: boolean;
+  skill_peaks?: Record<string, number>;
+}
+
+export function isPendingProfile(profile: StructuredProfile | null | undefined): boolean {
+  if (!profile) return true;
+  if (profile.id.startsWith("enroll-") || profile.id.startsWith("pending-") || profile.id === "you") return true;
+  return (profile.bio || "").trim() === "Enrolled in the course.";
+}
+
+export function hasOfficialTeam(match: MatchResponse | null | undefined): boolean {
+  return Boolean(match && !match.waiting && match.team.length);
 }
 
 export type ChatRole = "user" | "assistant";
@@ -84,6 +113,8 @@ export interface TeamMember {
   name: string;
   goal: GoalType;
   hours: number;
+  role?: "lead" | "contributor" | "either";
+  skills?: Skills;
 }
 
 export interface TeamResult {
@@ -97,6 +128,7 @@ export interface TeamResult {
   team_goal: string;
   coverage: string[];
   thin: string[];
+  skill_peaks?: Record<string, number>;
 }
 
 export interface PrefImpact {
@@ -204,10 +236,11 @@ export const BREAKDOWN_LABELS: Record<string, string> = {
 };
 
 export const DEFAULT_COURSE: CourseContext = {
-  name: "HackCMU Team Formation",
+  name: "Team Formation",
   grading_notes: "Collaborative project; teams of 3–4.",
   team_size_min: 3,
   team_size_max: 4,
+  focus_skills: [...ALL_SKILL_KEYS],
 };
 
 export const DAYS = [
@@ -273,6 +306,14 @@ export const SKILL_LABELS: Record<string, string> = {
   analysis: "Analysis",
   presentation: "Presentation",
 };
+
+export function courseSkillFields(course: { focus_skills?: string[]; skill_labels?: Record<string, string> }) {
+  const wanted = course.focus_skills?.length ? course.focus_skills : ALL_SKILL_KEYS;
+  return SKILL_FIELDS.filter((s) => wanted.includes(s.key)).map((s) => ({
+    ...s,
+    label: course.skill_labels?.[s.key] || s.label,
+  }));
+}
 
 export function skillList(keys: string[]): string {
   const labels = keys.map((k) => SKILL_LABELS[k] ?? k);

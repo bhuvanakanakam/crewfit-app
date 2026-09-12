@@ -1,14 +1,20 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { Clipboard, Flag } from "lucide-react";
 import { raiseConcern, submitProfile } from "../api";
 import {
   FLAG_REASONS,
-  skillList,
+  courseSkillFields,
   type Course,
   type FlagReason,
   type MatchResponse,
   type StructuredProfile,
 } from "../types";
-import AvailCalendar from "./AvailCalendar";
+import Chip from "./Chip";
+import PageIntro from "./PageIntro";
+import { SkillBars, WeekCalendar } from "./WeekCalendar";
+import { Button } from "./ui/button";
+
+const TONES = ["bg-accent-soft", "bg-secondary", "bg-good-soft", "bg-muted"];
 
 interface Props {
   result: MatchResponse;
@@ -31,7 +37,6 @@ export default function MyTeam({
   rematchAllowed,
   impactNote,
   impactHurt,
-  onChangeCourse,
   onUpdatePrefs,
   onRematch,
 }: Props) {
@@ -43,6 +48,20 @@ export default function MyTeam({
   const [flagError, setFlagError] = useState<string | null>(null);
 
   const names = result.team.map((m) => (m.is_you ? yourName : m.name));
+  const teamLabel =
+    result.team_label ||
+    (result.team_id?.startsWith("team-")
+      ? `Team ${String(Number(result.team_id.slice(5)) + 1).padStart(2, "0")}`
+      : "Your team");
+
+  useEffect(() => {
+    if (!flagOpen) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") setFlagOpen(false);
+    }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [flagOpen]);
 
   async function copyNames() {
     try {
@@ -69,126 +88,125 @@ export default function MyTeam({
   }
 
   return (
-    <div className="match-panel">
-      <div className="page-head">
-        <p className="kicker">{course.name}</p>
-        <h1>Your team</h1>
-        <p className="page-dek">Names and shared facts only — preferences stay private.</p>
-      </div>
+    <div>
+      <PageIntro
+        kicker={course.name}
+        title="Your team"
+        body="Names and shared facts only — everyone’s preferences stay private."
+      />
 
       {impactNote && (
-        <div className={impactHurt ? "need-box warn-box" : "need-box"}>
-          {impactNote}
+        <div className="mt-6 flex flex-col gap-4 rounded-2xl border border-warn bg-warn-soft p-5 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p className="font-bold text-warn">{impactHurt ? "Your new availability affects team fit." : impactNote}</p>
+            {impactHurt && (
+              <p className="mt-1 text-sm">
+                {impactNote} Your instructor has been notified; your team stays together for now.
+              </p>
+            )}
+          </div>
+          {impactHurt && <Chip tone="warn">Fit drop</Chip>}
         </div>
       )}
 
-      <ul className="teammate-list">
-        {result.team.map((m) => (
-          <li key={m.id} className={m.is_you ? "you" : ""}>
-            <span className="avatar" aria-hidden>
-              {(m.is_you ? yourName : m.name).charAt(0).toUpperCase()}
-            </span>
-            <div>
-              <strong>{m.is_you ? `${yourName} (you)` : m.name}</strong>
+      <div className="mt-7 grid gap-5 lg:grid-cols-[1.25fr_.75fr]">
+        <div className="space-y-5">
+          <section className="rounded-2xl border bg-card p-6 paper-shadow">
+            <div className="flex items-center justify-between gap-3">
+              <h2 className="font-display text-2xl font-medium tracking-[-0.03em]">{teamLabel}</h2>
+              <Button variant="outline" size="sm" onClick={() => void copyNames()}>
+                <Clipboard /> {copied ? "Copied names" : "Copy names"}
+              </Button>
             </div>
-          </li>
-        ))}
-      </ul>
+            <div className="mt-6 grid gap-3 sm:grid-cols-2">
+              {result.team.map((m, i) => {
+                const label = m.is_you ? yourName : m.name;
+                return (
+                  <div key={m.id} className={`rounded-xl p-4 ${TONES[i % TONES.length]}`}>
+                    <div className="flex items-start justify-between gap-2">
+                      <p className="font-bold">{label}</p>
+                      {m.is_you && <Chip tone="accent">You</Chip>}
+                    </div>
+                    <p className="mt-1 text-sm text-muted-foreground">{m.is_you ? "You" : "Teammate"}</p>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
 
-      <div className="avail-block">
-        <h3>Shared windows</h3>
-        {(result.shared_windows ?? []).length > 0 ? (
-          <AvailCalendar slots={result.shared_windows} />
-        ) : (
-          <p className="pref-empty">None fully overlap — plan to work asynchronously.</p>
-        )}
-      </div>
-
-      <div className="fact-grid">
-        <article>
-          <h3>Team goal</h3>
-          <p>{result.team_goal || "Shared project aim"}</p>
-        </article>
-        <article>
-          <h3>Coverage</h3>
-          <p>
-            {(result.coverage ?? []).length > 0 ? skillList(result.coverage) : "No strong coverage yet"}
-            {(result.thin ?? []).length > 0 ? ` · thinner on ${skillList(result.thin).toLowerCase()}` : ""}
-          </p>
-        </article>
-      </div>
-
-      <div className="why-block">
-        <h3>Why this team</h3>
-        <p>{result.rationale}</p>
-      </div>
-
-      <div className="next-steps">
-        <h3>Next steps</h3>
-        <div className="form-actions">
-          <button className="btn primary" type="button" onClick={() => void copyNames()}>
-            {copied ? "Copied names" : "Copy names"}
-          </button>
-          <button className="btn ghost" type="button" onClick={onUpdatePrefs}>
-            Update preferences
-          </button>
-          <button className="btn ghost" type="button" onClick={() => setFlagOpen((v) => !v)}>
-            Flag a concern
-          </button>
+          <section className="rounded-2xl border bg-card p-6 paper-shadow">
+            <h2 className="font-display text-2xl font-medium tracking-[-0.03em]">Shared windows</h2>
+            <p className="mb-5 mt-1 text-sm text-muted-foreground">Times when the full team can meet.</p>
+            <WeekCalendar slots={result.shared_windows ?? []} compact />
+          </section>
         </div>
 
-        {flagState === "sent" && (
-          <p className="need-note">
-            Concern sent to the teacher. Your team stays as-is until they approve a rematch.
-          </p>
-        )}
-        {flagError && <div className="error-banner">{flagError}</div>}
+        <aside className="space-y-5">
+          <section className="rounded-2xl border bg-card p-6 paper-shadow">
+            <div className="kicker">Team goal</div>
+            <h3 className="mt-2 font-display text-2xl font-medium tracking-[-0.03em]">{result.team_goal || "Shared project aim"}</h3>
+            <p className="mt-2 text-sm text-muted-foreground">Hours, goals, and skills aligned for this course.</p>
+          </section>
+          <section className="rounded-2xl border bg-card p-6 paper-shadow">
+            <h3 className="font-display text-xl font-medium tracking-[-0.03em]">Skill coverage</h3>
+            <div className="mt-5">
+              <SkillBars
+                coverage={result.coverage}
+                thin={result.thin}
+                skills={result.skill_peaks}
+                keys={courseSkillFields(course).map((s) => s.key)}
+                labels={Object.fromEntries(courseSkillFields(course).map((s) => [s.key, s.label]))}
+              />
+            </div>
+          </section>
+          <Button variant="outline" className="w-full" onClick={onUpdatePrefs}>
+            Update preferences
+          </Button>
+          <Button variant="ghost" className="w-full text-warn" onClick={() => setFlagOpen(true)}>
+            <Flag /> Flag a concern
+          </Button>
+          {flagState === "sent" && (
+            <p className="text-sm text-muted-foreground">Concern sent to the teacher. Your team stays as-is until they approve a rematch.</p>
+          )}
+          {flagError && <p className="rounded-xl bg-warn-soft p-3 text-sm font-semibold text-warn">{flagError}</p>}
+          {rematchAllowed && onRematch && (
+            <Button variant="ghost" className="w-full" onClick={onRematch}>
+              Redo team matching
+            </Button>
+          )}
+        </aside>
+      </div>
 
-        {flagOpen && flagState !== "sent" && (
-          <div className="flag-box">
-            <p className="field-help">This goes to your teacher for this course — teammates don’t see it.</p>
-            <div className="chip-grid">
+      <section className="mt-5 rounded-2xl border bg-accent-soft px-8 py-7">
+        <h3 className="font-display text-xl font-medium tracking-[-0.03em]">Why this team</h3>
+        <p className="mt-3 max-w-none text-base leading-relaxed">{result.rationale}</p>
+      </section>
+
+      {flagOpen && flagState !== "sent" && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-foreground/35 p-4" onMouseDown={() => setFlagOpen(false)}>
+          <section className="w-full max-w-md rounded-2xl border bg-card p-6 paper-shadow" onMouseDown={(e) => e.stopPropagation()}>
+            <div className="kicker">Teacher only</div>
+            <h2 className="mt-1 font-display text-2xl font-medium tracking-[-0.03em]">Flag a concern</h2>
+            <p className="mt-3 text-sm text-muted-foreground">Your teammates won’t see this report.</p>
+            <div className="mt-5 grid grid-cols-2 gap-2">
               {FLAG_REASONS.map((r) => (
-                <button
-                  key={r.value}
-                  type="button"
-                  className={`choice${reason === r.value ? " on" : ""}`}
-                  onClick={() => setReason(r.value)}
-                >
-                  <span className="choice-title">{r.label}</span>
-                </button>
+                <Button key={r.value} variant="outline" className={reason === r.value ? "border-primary bg-accent-soft" : ""} onClick={() => setReason(r.value)}>
+                  {r.label}
+                </Button>
               ))}
             </div>
-            <label htmlFor="flag-note">Optional note</label>
             <textarea
-              id="flag-note"
-              rows={2}
+              className="mt-4 min-h-24 w-full rounded-xl border bg-background p-3 text-sm"
+              placeholder="Optional note"
               value={note}
               onChange={(e) => setNote(e.target.value)}
-              placeholder="What’s not working?"
             />
-            <button
-              className="btn primary"
-              type="button"
-              disabled={flagState === "sending"}
-              onClick={() => void sendFlag()}
-            >
+            <Button className="mt-4 w-full" disabled={flagState === "sending"} onClick={() => void sendFlag()}>
               {flagState === "sending" ? "Sending…" : "Send to teacher"}
-            </button>
-          </div>
-        )}
-      </div>
-
-      <div className="form-actions">
-        {rematchAllowed && onRematch && (
-          <button className="btn ghost" type="button" onClick={onRematch}>
-            Redo team matching
-          </button>
-        )}
-        <button className="text-link" type="button" onClick={onChangeCourse}>
-          Use this profile in another course
-        </button>
-      </div>
+            </Button>
+          </section>
+        </div>
+      )}
     </div>
   );
 }

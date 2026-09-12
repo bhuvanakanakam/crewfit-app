@@ -17,6 +17,7 @@ encrypted as XAI_API_KEY_ENCRYPTED in .env.shared (see app/crypto_secret.py).
 """
 
 import json
+import os
 import re
 
 from openai import OpenAI
@@ -102,32 +103,42 @@ def resolve_clarification(name: str, bio: str, course_context: str, qa_pairs: li
     return extract_profile(name, enriched_bio, course_context)
 
 
-def generate_rationale(member_names: list[str], breakdown: dict, dominant_goal_label: str) -> str:
-    if _client is None:
+def generate_rationale(
+    member_names: list[str],
+    breakdown: dict,
+    dominant_goal_label: str,
+    extras: dict | None = None,
+) -> str:
+    if _client is None or os.getenv("PYTEST_CURRENT_TEST"):
         return _heuristic_rationale(member_names, breakdown, dominant_goal_label)
 
-    response = _client.chat.completions.create(
-        model=XAI_MODEL,
-        messages=[
-            {
-                "role": "system",
-                "content": (
-                    "Write ONE short, plain-language sentence explaining why this team was grouped "
-                    "together, for the students themselves to read. Base it only on the scores given "
-                    "(0-1 scale, higher is better alignment). No hedging, no filler, no restating the "
-                    "numbers directly — describe what they mean. Do NOT reveal anyone's private "
-                    "preferences, hours, skill ratings, or survey answers — speak only in terms of "
-                    "shared fit (goals, schedules, complementary strengths, similar commitment)."
-                ),
-            },
-            {
-                "role": "user",
-                "content": json.dumps({"members": member_names, "scores": breakdown, "most_common_goal": dominant_goal_label}),
-            },
-        ],
-        temperature=0.4,
-    )
-    return response.choices[0].message.content.strip()
+    payload = {
+        "members": member_names,
+        "scores": breakdown,
+        "most_common_goal": dominant_goal_label,
+        **(extras or {}),
+    }
+    try:
+        response = _client.chat.completions.create(
+            model=XAI_MODEL,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Write 2 short sentences for students: why this team was grouped, and what "
+                        "skill coverage looks like (covered vs thin). Use only the facts given. "
+                        "No hedging, no raw numbers, no private ratings or hours. Speak in shared "
+                        "fit: goals, schedules, complementary strengths, similar commitment."
+                    ),
+                },
+                {"role": "user", "content": json.dumps(payload)},
+            ],
+            temperature=0.4,
+        )
+        text = (response.choices[0].message.content or "").strip()
+        return text or _heuristic_rationale(member_names, breakdown, dominant_goal_label)
+    except Exception:
+        return _heuristic_rationale(member_names, breakdown, dominant_goal_label)
 
 
 _SKILL_KEYS = ("technical", "writing", "analysis", "presentation")

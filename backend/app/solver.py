@@ -40,11 +40,12 @@ class SolveResult:
     status: str  # "OPTIMAL" | "FEASIBLE"
 
 
-def feasible_team_count(n: int, min_size: int, max_size: int) -> int:
+def feasible_team_count(n: int, min_size: int, max_size: int, team_count: int | None = None) -> int:
     """Smallest k with k * min_size <= n <= k * max_size.
 
     round(n / max_size) is not always feasible (e.g. n=13, min=3, max=4).
     Prefer the smallest legal k so teams stay as close to max_size as possible.
+    If the instructor set an exact team count, use that when it is feasible.
     """
     if min_size < 1 or max_size < min_size:
         raise RuntimeError(f"Invalid team size bounds [{min_size}, {max_size}].")
@@ -54,13 +55,20 @@ def feasible_team_count(n: int, min_size: int, max_size: int) -> int:
             f"No feasible team count for {n} people with sizes [{min_size}, {max_size}]. "
             "Try relaxing team size bounds."
         )
+    if team_count is not None:
+        if team_count not in candidates:
+            raise RuntimeError(
+                f"Can't make {team_count} teams from {n} people with sizes [{min_size}, {max_size}]. "
+                f"Legal counts: {candidates[0]}–{candidates[-1]}."
+            )
+        return team_count
     return min(candidates)
 
 
-def legal_team_sizes(n: int, min_size: int, max_size: int) -> list[int]:
+def legal_team_sizes(n: int, min_size: int, max_size: int, team_count: int | None = None) -> list[int]:
     """Concrete sizes summing to n, each in [min_size, max_size], for the chosen k.
     Sizes differ by at most one when extra seats are spread evenly."""
-    k = feasible_team_count(n, min_size, max_size)
+    k = feasible_team_count(n, min_size, max_size, team_count)
     base = n // k
     extra = n % k
     sizes = [base + 1] * extra + [base] * (k - extra)
@@ -89,8 +97,18 @@ def solve_teams(
     max_size: int,
     vetoes: set,
     time_limit_s: float = 10.0,
+    team_count: int | None = None,
+    focus_skills: list[str] | None = None,
 ) -> list[list]:
-    return solve_teams_detailed(people, min_size, max_size, vetoes, time_limit_s).teams
+    return solve_teams_detailed(
+        people,
+        min_size,
+        max_size,
+        vetoes,
+        time_limit_s,
+        team_count=team_count,
+        focus_skills=focus_skills,
+    ).teams
 
 
 def solve_teams_detailed(
@@ -99,6 +117,8 @@ def solve_teams_detailed(
     max_size: int,
     vetoes: set,
     time_limit_s: float = 10.0,
+    team_count: int | None = None,
+    focus_skills: list[str] | None = None,
 ) -> SolveResult:
     n = len(people)
     if n == 0:
@@ -106,8 +126,8 @@ def solve_teams_detailed(
     if n < min_size:
         raise RuntimeError(f"Not enough people ({n}) to form even one team of {min_size}.")
 
-    num_teams = feasible_team_count(n, min_size, max_size)
-    planned_sizes = legal_team_sizes(n, min_size, max_size)
+    num_teams = feasible_team_count(n, min_size, max_size, team_count)
+    planned_sizes = legal_team_sizes(n, min_size, max_size, team_count)
     uniform_size = planned_sizes[0] if len(set(planned_sizes)) == 1 else None
     legal_sizes = list(range(min_size, max_size + 1))
     pair_counts = [comb(s, 2) for s in legal_sizes]
@@ -146,7 +166,7 @@ def solve_teams_detailed(
     pair_terms = {t: [] for t in range(num_teams)}
 
     for i, j in combinations(range(n), 2):
-        result = pair_score(people[i], people[j], vetoes)
+        result = pair_score(people[i], people[j], vetoes, focus_skills)
         if result is None:
             for t in range(num_teams):
                 model.Add(x[i, t] + x[j, t] <= 1)

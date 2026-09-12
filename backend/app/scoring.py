@@ -13,8 +13,21 @@ GOAL_ALIGN = {
 }
 
 WEIGHTS = {"goal": 0.35, "avail": 0.25, "skill": 0.20, "workload": 0.15, "role": 0.05}
+FOCUS_WEIGHTS = {"goal": 0.28, "avail": 0.22, "skill": 0.32, "workload": 0.13, "role": 0.05}
 
 SKILL_CATEGORIES = ["technical", "writing", "analysis", "presentation"]
+
+
+def _skill_keys(focus_skills: list[str] | None) -> list[str]:
+    keys = [key for key in (focus_skills or []) if key in SKILL_CATEGORIES]
+    return keys or list(SKILL_CATEGORIES)
+
+
+def _weights(focus_skills: list[str] | None) -> dict[str, float]:
+    keys = _skill_keys(focus_skills)
+    if focus_skills and len(keys) < len(SKILL_CATEGORIES):
+        return FOCUS_WEIGHTS
+    return WEIGHTS
 
 
 def availability_overlap(a, b):
@@ -25,9 +38,10 @@ def availability_overlap(a, b):
     return jaccard, len(inter) > 0
 
 
-def skill_score(a, b):
-    total = sum(max(getattr(a.skills, c), getattr(b.skills, c)) for c in SKILL_CATEGORIES)
-    return total / (len(SKILL_CATEGORIES) * 5)
+def skill_score(a, b, focus_skills: list[str] | None = None):
+    keys = _skill_keys(focus_skills)
+    total = sum(max(getattr(a.skills, c), getattr(b.skills, c)) for c in keys)
+    return total / (len(keys) * 5)
 
 
 def workload_sim(a, b):
@@ -51,7 +65,7 @@ def veto_key(a_id: str, b_id: str):
 HARD_CONFLICT_PENALTY = -1.5  # no overlapping availability: heavily discouraged, not infeasible
 
 
-def pair_score(a, b, vetoes: set):
+def pair_score(a, b, vetoes: set, focus_skills: list[str] | None = None):
     """Returns None only for an explicit organizer veto — that's the one true
     hard constraint the solver enforces structurally.
 
@@ -74,15 +88,16 @@ def pair_score(a, b, vetoes: set):
         }
 
     goal = GOAL_ALIGN[a.goal][b.goal]
-    skill = skill_score(a, b)
+    skill = skill_score(a, b, focus_skills)
     workload = workload_sim(a, b)
     role = role_bonus(a, b)
+    weights = _weights(focus_skills)
     score = (
-        WEIGHTS["goal"] * goal
-        + WEIGHTS["avail"] * jaccard
-        + WEIGHTS["skill"] * skill
-        + WEIGHTS["workload"] * workload
-        + WEIGHTS["role"] * role
+        weights["goal"] * goal
+        + weights["avail"] * jaccard
+        + weights["skill"] * skill
+        + weights["workload"] * workload
+        + weights["role"] * role
     )
     return {
         "score": score,
