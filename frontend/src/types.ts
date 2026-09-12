@@ -7,6 +7,25 @@ export interface CourseContext {
   team_size_max: number;
 }
 
+export interface Course {
+  id: string;
+  name: string;
+  grading_notes: string;
+  team_size_min: number;
+  team_size_max: number;
+  access?: "student" | "teacher" | "ta";
+  enrolled?: boolean;
+}
+
+export function toCourseContext(course: Course): CourseContext {
+  return {
+    name: course.name,
+    grading_notes: course.grading_notes,
+    team_size_min: course.team_size_min,
+    team_size_max: course.team_size_max,
+  };
+}
+
 export interface Skills {
   technical: number;
   writing: number;
@@ -39,7 +58,150 @@ export interface MatchResponse {
   team: PublicTeammate[];
   rationale: string;
   cohort_size: number;
+  shared_windows: string[];
+  team_goal: string;
+  coverage: string[];
+  thin: string[];
+  course_id: string;
+  course_name: string;
 }
+
+export type ChatRole = "user" | "assistant";
+
+export interface ChatMessage {
+  role: ChatRole;
+  content: string;
+}
+
+export interface ChatResponse {
+  reply: string;
+  ready: boolean;
+  profile: StructuredProfile | null;
+}
+
+export interface TeamMember {
+  id: string;
+  name: string;
+  goal: GoalType;
+  hours: number;
+}
+
+export interface TeamResult {
+  team_id: string;
+  members: TeamMember[];
+  score: number;
+  breakdown: Record<string, number>;
+  violations: number;
+  rationale: string;
+  shared_windows: string[];
+  team_goal: string;
+  coverage: string[];
+  thin: string[];
+}
+
+export interface PrefImpact {
+  before: number;
+  after: number;
+  delta_pct: number;
+  hurts_team: boolean;
+  message: string;
+  teammates: string[];
+}
+
+export interface SubmitResponse {
+  profile: StructuredProfile;
+  impact?: PrefImpact | null;
+}
+
+export interface NotificationRecord {
+  id: string;
+  course_id: string;
+  to_name: string;
+  to_role: "student" | "teacher";
+  kind: "concern" | "pref_update" | "score_drop" | "rematch" | "team" | "staff";
+  title: string;
+  body: string;
+  read: boolean;
+  created_at: string;
+  student?: string | null;
+  reason?: string | null;
+}
+
+export interface ConcernRecord {
+  name: string;
+  course_id: string;
+  reason: FlagReason;
+  note: string;
+  status?: "open" | "approved" | "denied";
+  allow_rematch?: boolean;
+}
+
+export interface RosterResponse {
+  profiles: StructuredProfile[];
+  concerns: Record<string, ConcernRecord>;
+  rematch_allowed?: Record<string, boolean>;
+  course: Course;
+  assignment?: OptimizeResponse | null;
+}
+
+export interface OptimizeResponse {
+  teams: TeamResult[];
+  baseline_score: number;
+  improvement_pct: number;
+  flag_note?: string | null;
+}
+
+export interface LoginResponse {
+  name: string;
+  role: "student" | "teacher";
+  staff_kind: "teacher" | "ta" | "none";
+  can_create_course: boolean;
+  hint?: string | null;
+  courses: Course[];
+}
+
+export type FlagReason = "schedule" | "goal" | "workload" | "other";
+
+export const FLAG_REASONS: { value: FlagReason; label: string }[] = [
+  { value: "schedule", label: "Schedule" },
+  { value: "goal", label: "Goal mismatch" },
+  { value: "workload", label: "Workload" },
+  { value: "other", label: "Other" },
+];
+
+export const FLAG_REASON_LABELS: Record<FlagReason, string> = {
+  schedule: "Schedule",
+  goal: "Goal mismatch",
+  workload: "Workload",
+  other: "Other",
+};
+
+export const GOAL_LABELS: Record<GoalType, string> = {
+  pass: "Pass",
+  grade_A: "Grade A",
+  research: "Research",
+  deep_mastery: "Deep mastery",
+};
+
+export const ROLE_LABELS = {
+  lead: "Lead",
+  contributor: "Contributor",
+  either: "Either",
+} as const;
+
+export const CONFLICT_LABELS = {
+  vote: "Vote",
+  rotate_lead: "Rotate lead",
+  escalate: "Escalate",
+  defer_to_invested: "Defer to invested",
+} as const;
+
+export const BREAKDOWN_LABELS: Record<string, string> = {
+  goal: "Goals",
+  avail: "Schedule",
+  skill: "Skills",
+  workload: "Hours",
+};
 
 export const DEFAULT_COURSE: CourseContext = {
   name: "HackCMU Team Formation",
@@ -93,3 +255,29 @@ export const GOAL_OPTIONS: { value: GoalType; label: string; hint: string }[] = 
   { value: "research", label: "Research", hint: "Publishable / research angle" },
   { value: "deep_mastery", label: "Deep mastery", hint: "Really learn the material" },
 ];
+
+export function formatSlot(slot: string): string {
+  const [day, time] = slot.split("_");
+  const d = DAYS.find((x) => x.id === day)?.label ?? day;
+  const t = TIMES.find((x) => x.id === time)?.label ?? time;
+  return `${d} ${t}`;
+}
+
+export function isLiveStudent(id: string): boolean {
+  return id.startsWith("stu-");
+}
+
+export const SKILL_LABELS: Record<string, string> = {
+  technical: "Technical",
+  writing: "Writing",
+  analysis: "Analysis",
+  presentation: "Presentation",
+};
+
+export function skillList(keys: string[]): string {
+  const labels = keys.map((k) => SKILL_LABELS[k] ?? k);
+  if (labels.length === 0) return "";
+  if (labels.length === 1) return labels[0];
+  if (labels.length === 2) return `${labels[0]} and ${labels[1]}`;
+  return `${labels.slice(0, -1).join(", ")}, and ${labels[labels.length - 1]}`;
+}

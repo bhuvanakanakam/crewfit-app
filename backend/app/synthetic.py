@@ -18,7 +18,12 @@ GOAL_WEIGHTS = [0.2, 0.4, 0.15, 0.25]
 ROLE_WEIGHTS = [0.2, 0.35, 0.45]
 
 
-def generate_cohort(exclude_name: str, count: int = 15, seed: int | None = None) -> list[StructuredProfile]:
+def generate_cohort(
+    exclude_name: str,
+    count: int = 15,
+    seed: int | None = None,
+    exclude_names: set[str] | None = None,
+) -> list[StructuredProfile]:
     fake = Faker()
     if seed is not None:
         Faker.seed(seed)
@@ -26,6 +31,8 @@ def generate_cohort(exclude_name: str, count: int = 15, seed: int | None = None)
 
     profiles: list[StructuredProfile] = []
     used_names: set[str] = {exclude_name.strip().lower()}
+    if exclude_names:
+        used_names |= {n.strip().lower() for n in exclude_names if n.strip()}
 
     for i in range(count):
         name = fake.first_name()
