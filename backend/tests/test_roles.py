@@ -113,14 +113,13 @@ def test_instructor_or_student_can_create_course_with_cohort():
             "actor": "Priya Chen",
             "team_size_min": 3,
             "team_size_max": 4,
-            "team_count": 5,
             "objective": "Policy memo teams that can analyze and write.",
             "focus_skills": ["analysis", "writing"],
         },
     )
     assert created.status_code == 200
     assert created.json()["access"] == "teacher"
-    assert created.json()["team_count"] == 5
+    assert created.json()["team_count"] in (None, 0)
     assert created.json()["focus_skills"] == ["analysis", "writing"]
     assert "Policy memo" in (created.json()["objective"] or "")
     cid = created.json()["id"]

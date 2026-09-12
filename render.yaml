@@ -11,4 +11,4 @@ services:
       - key: XAI_MODEL
         value: grok-4-fast
       - key: CORS_ORIGINS
-        sync: false
+        value: https://crewfit-app.vercel.app

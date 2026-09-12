@@ -40,16 +40,31 @@ class SolveResult:
     status: str  # "OPTIMAL" | "FEASIBLE"
 
 
+def _legal_counts(n: int, min_size: int, max_size: int) -> list[int]:
+    return [k for k in range(1, n + 1) if k * min_size <= n <= k * max_size]
+
+
+def packable_count(n: int, min_size: int, max_size: int) -> int:
+    """Largest m <= n that can be split into teams within [min_size, max_size]."""
+    if min_size < 1 or max_size < min_size or n < min_size:
+        return 0
+    for m in range(n, min_size - 1, -1):
+        if _legal_counts(m, min_size, max_size):
+            return m
+    return 0
+
+
 def feasible_team_count(n: int, min_size: int, max_size: int, team_count: int | None = None) -> int:
     """Smallest k with k * min_size <= n <= k * max_size.
 
     round(n / max_size) is not always feasible (e.g. n=13, min=3, max=4).
     Prefer the smallest legal k so teams stay as close to max_size as possible.
-    If the instructor set an exact team count, use that when it is feasible.
+    Team count is always computed from the roster unless a still-legal override
+    is passed in (tests / offline scripts).
     """
     if min_size < 1 or max_size < min_size:
         raise RuntimeError(f"Invalid team size bounds [{min_size}, {max_size}].")
-    candidates = [k for k in range(1, n + 1) if k * min_size <= n <= k * max_size]
+    candidates = _legal_counts(n, min_size, max_size)
     if not candidates:
         raise RuntimeError(
             f"No feasible team count for {n} people with sizes [{min_size}, {max_size}]. "
@@ -77,6 +92,29 @@ def legal_team_sizes(n: int, min_size: int, max_size: int, team_count: int | Non
             f"No feasible team sizes for {n} people with bounds [{min_size}, {max_size}]."
         )
     return sizes
+
+
+def _mean_pair_fit(person, others, vetoes: set, focus_skills: list[str] | None) -> float:
+    vals = []
+    for other in others:
+        result = pair_score(person, other, vetoes, focus_skills)
+        vals.append(result["score"] if result else -1.5)
+    return sum(vals) / len(vals) if vals else 0.0
+
+
+def _leave_unassigned(people: list, leftover: int, vetoes: set, focus_skills: list[str] | None) -> list:
+    """Drop the least-connected people so the rest pack into legal team sizes."""
+    if leftover <= 0:
+        return []
+    ranked = sorted(
+        people,
+        key=lambda person: (
+            _mean_pair_fit(person, [other for other in people if other is not person], vetoes, focus_skills),
+            getattr(person, "name", ""),
+            getattr(person, "id", ""),
+        ),
+    )
+    return ranked[:leftover]
 
 
 def _pair_coeff(result: dict) -> int:
@@ -125,6 +163,18 @@ def solve_teams_detailed(
         return SolveResult(teams=[], status="OPTIMAL")
     if n < min_size:
         raise RuntimeError(f"Not enough people ({n}) to form even one team of {min_size}.")
+
+    placed = packable_count(n, min_size, max_size)
+    if placed == 0:
+        raise RuntimeError(
+            f"No feasible team count for {n} people with sizes [{min_size}, {max_size}]. "
+            "Try relaxing team size bounds."
+        )
+    if placed < n:
+        skip_ids = {id(person) for person in _leave_unassigned(people, n - placed, vetoes, focus_skills)}
+        people = [person for person in people if id(person) not in skip_ids]
+        n = len(people)
+        team_count = None
 
     num_teams = feasible_team_count(n, min_size, max_size, team_count)
     planned_sizes = legal_team_sizes(n, min_size, max_size, team_count)

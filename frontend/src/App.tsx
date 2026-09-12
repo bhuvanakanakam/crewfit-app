@@ -188,7 +188,7 @@ export default function App() {
         } else if (!res.profile) {
           setProfile((cur) => (cur && !isPendingProfile(cur) ? cur : null));
         }
-        if (hasOfficialTeam(res.match)) {
+        if (res.match && hasOfficialTeam(res.match)) {
           setMatch(res.match);
           saveMatch(session.name, course.id, res.match);
           setRematchAllowed(Boolean(res.rematch_allowed));
@@ -240,7 +240,7 @@ export default function App() {
           setProfile(looked.profile);
           saveProfile(looked.profile);
         }
-        if (hasOfficialTeam(looked.match)) {
+        if (looked.match && hasOfficialTeam(looked.match)) {
           setMatch(looked.match);
           saveMatch(session.name, course.id, looked.match);
         }

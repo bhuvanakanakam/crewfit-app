@@ -3,7 +3,7 @@ import random
 from itertools import combinations
 
 from .scoring import pair_score
-from .solver import legal_team_sizes, solve_teams
+from .solver import legal_team_sizes, packable_count, solve_teams
 
 BREAKDOWN_KEYS = ["goal", "avail", "skill", "workload"]
 
@@ -58,7 +58,13 @@ def legal_random_partition(
     rng = rng or random
     shuffled = people[:]
     rng.shuffle(shuffled)
-    sizes = legal_team_sizes(len(people), min_size, max_size, team_count)
+    placed = packable_count(len(shuffled), min_size, max_size)
+    if placed == 0:
+        return []
+    if placed < len(shuffled):
+        shuffled = shuffled[:placed]
+        team_count = None
+    sizes = legal_team_sizes(len(shuffled), min_size, max_size, team_count)
     teams = []
     idx = 0
     for size in sizes:
@@ -96,9 +102,8 @@ def best_swap_for_person(teams: list[list], person_id: str, vetoes: set):
     """Local re-optimization for the 'flag this team' flow: search every
     possible swap of the flagged person with someone on a different team,
     and return the swap that improves total score the most (or None)."""
-    current_idx = next(i for i, t in enumerate(teams) if any(m.id == person_id for m in t))
+    current_idx, person = _locate_person(teams, person_id)
     current_team = teams[current_idx]
-    person = next(m for m in current_team if m.id == person_id)
 
     best = None
     for j, other_team in enumerate(teams):
@@ -133,7 +138,7 @@ def _best_subset_resolve(teams: list[list], person_id: str, vetoes: set, min_siz
     """When a single swap can't help, re-solve the flagged person's team
     paired with each other team (the affected subset) and keep the best
     improving reassignment, leaves every other team untouched."""
-    current_idx = next(i for i, t in enumerate(teams) if any(m.id == person_id for m in t))
+    current_idx, _person = _locate_person(teams, person_id)
     before = total_score(teams, vetoes)
     best = None
 
@@ -169,7 +174,8 @@ def reoptimize_for_flag(
     """Flag flow: try a single swap first; if that can't improve the score,
     fall back to a CP-SAT re-solve of the affected two-team subset. Returns
     (teams, human-readable note) so the UI never pretends a no-op worked."""
-    person_name = next(m.name for t in teams for m in t if m.id == person_id)
+    _idx, flagged = _locate_person(teams, person_id)
+    person_name = flagged.name
 
     swap = best_swap_for_person(teams, person_id, vetoes)
     if swap and swap["delta"] > 0:
@@ -194,3 +200,70 @@ def reoptimize_for_flag(
         "Adjust profiles or vetoes, then run Optimize again."
     )
     return teams, note
+
+
+def _locate_person(teams: list[list], person_id: str):
+    key = (person_id or "").strip().lower()
+    for idx, team in enumerate(teams):
+        for member in team:
+            if member.id == person_id:
+                return idx, member
+    if key:
+        for idx, team in enumerate(teams):
+            for member in team:
+                if member.name.strip().lower() == key:
+                    return idx, member
+    raise ValueError(f"Student {person_id} is not on a team.")
+
+
+def move_person_to_team(
+    teams: list[list],
+    person_id: str,
+    target_idx: int,
+    min_size: int,
+    max_size: int,
+    vetoes: set | None = None,
+) -> tuple[list[list], str]:
+    """Teacher override: put this student on the chosen team.
+
+    Transfers when sizes stay legal; otherwise swaps with the dest teammate
+    that hurts overall score the least. Does not require a score increase.
+    """
+    vetoes = vetoes or set()
+    if target_idx < 0 or target_idx >= len(teams):
+        raise ValueError("That team is not on this assignment.")
+    src_idx, person = _locate_person(teams, person_id)
+    if src_idx == target_idx:
+        return teams, f"{person.name} is already on that team."
+
+    src = teams[src_idx]
+    dest = teams[target_idx]
+    if len(dest) < max_size and len(src) > min_size:
+        src.remove(person)
+        dest.append(person)
+        return teams, f"Moved {person.name}."
+
+    best = None
+    for candidate in dest:
+        before = team_stats(src, vetoes)["avg"] + team_stats(dest, vetoes)["avg"]
+        si, di = src.index(person), dest.index(candidate)
+        src[si], dest[di] = candidate, person
+        after = team_stats(src, vetoes)["avg"] + team_stats(dest, vetoes)["avg"]
+        src[si], dest[di] = person, candidate
+        delta = after - before
+        if best is None or delta > best["delta"]:
+            best = {"delta": delta, "candidate": candidate}
+
+    if best is None:
+        return teams, f"Couldn't move {person.name}."
+
+    apply_swap(
+        teams,
+        {
+            "current_idx": src_idx,
+            "other_idx": target_idx,
+            "person": person,
+            "candidate": best["candidate"],
+        },
+    )
+    return teams, f"Moved {person.name} (swapped with {best['candidate'].name})."

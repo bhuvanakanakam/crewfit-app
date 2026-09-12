@@ -162,9 +162,7 @@ export default function CoursePicker({ name, role, staffKind, canCreateCourse, o
                   <span className="flex flex-wrap gap-2">
                     <Chip tone="accent">{chip}</Chip>
                     <Chip>
-                      {c.team_count
-                        ? `${c.team_count} teams of ${c.team_size_min}–${c.team_size_max}`
-                        : `Teams of ${c.team_size_min}–${c.team_size_max}`}
+                      Teams of {c.team_size_min}–{c.team_size_max}
                     </Chip>
                   </span>
                   <span className="mt-5 block font-display text-2xl font-medium tracking-[-0.03em]">{c.name}</span>

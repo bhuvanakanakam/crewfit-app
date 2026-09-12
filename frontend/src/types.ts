@@ -36,7 +36,7 @@ export function toCourseContext(course: Course): CourseContext {
     grading_notes: course.objective || course.grading_notes,
     team_size_min: course.team_size_min,
     team_size_max: course.team_size_max,
-    team_count: course.team_count,
+    team_count: null,
     objective: course.objective || course.grading_notes,
     focus_skills: course.focus_skills,
     skill_labels: course.skill_labels,
